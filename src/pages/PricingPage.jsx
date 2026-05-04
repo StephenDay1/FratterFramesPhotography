@@ -4,8 +4,8 @@ function PricingPage() {
   return (
     <PageTemplate
       title="Pricing"
-      description="Simple pricing options are coming soon. This page is ready for you to add package tiers, add-ons, and any seasonal offers."
-      ctaLabel="Request Pricing Guide"
+      description="Simple pricing options are coming soon. For now feel free to reach out to me on Instagram."
+      // ctaLabel="Request Pricing Guide"
     />
   )
 }

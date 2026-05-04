@@ -31,13 +31,15 @@ function HomePage() {
     {
       type: 'title',
       title: 'Fratter Frames Photography',
+      description: 'Recently had a photoshoot? Click here to find your photos.',
+      redirectUrl: '/galleries',
       className: 'md:col-start-3 md:col-span-2 md:row-start-3 md:row-span-1',
     },
     {
       src: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80',
       alt: 'Sunset mountains',
-      coverText: 'Gallery',
-      redirectUrl: '/gallery',
+      coverText: 'Browse My Work',
+      redirectUrl: '/browse',
       className: 'md:col-start-4 md:col-span-2 md:row-start-1 md:row-span-2',
     },
     {
@@ -83,6 +85,7 @@ function HomePage() {
     {
       src: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=900&q=80',
       alt: 'Studio setup',
+      redirectUrl: '/contact-me',
       coverText: 'Contact Me',
       mobileHalf: true,
       className: 'md:col-start-3 md:col-span-2 md:row-start-4 md:row-span-1',
@@ -99,11 +102,16 @@ function HomePage() {
               className={`relative ${tile.mobileHalf ? 'col-span-1' : 'col-span-2'} overflow-hidden rounded-2xl md:min-h-0 ${tile.coverText ? 'group' : ''} ${tile.className}`}
             >
               {tile.type === 'title' ? (
-                <div className="flex h-full items-center justify-center bg-zinc-900 p-6">
+                <Link to={tile.redirectUrl}>
+                <div className="flex h-full items-center justify-center flex-col bg-zinc-900 p-6">
                   <h1 className="w-full text-center text-xl font-semibold tracking-tight md:text-2xl">
                     {tile.title}
                   </h1>
+                  <p className="text-center text-sm text-zinc-300">
+                    {tile.description}
+                  </p>
                 </div>
+                </Link>
               ) : (
                 <>
                   <img

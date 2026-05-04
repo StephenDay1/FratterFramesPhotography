@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 
-function PageTemplate({ title, description, ctaLabel = 'Book a Session' }) {
+function PageTemplate({ title, description, ctaLabel}) {
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto flex min-h-screen w-full max-w-4xl flex-col justify-center px-6 py-12">
@@ -19,12 +19,13 @@ function PageTemplate({ title, description, ctaLabel = 'Book a Session' }) {
             {description}
           </p>
 
-          <button
+          {ctaLabel && ctaLabel !== '' && <button
             type="button"
             className="mt-8 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-          >
-            {ctaLabel}
-          </button>
+            >
+              {ctaLabel}
+            </button>
+          }
         </section>
       </div>
     </main>

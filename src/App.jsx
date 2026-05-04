@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AboutMePage from './pages/AboutMePage'
+import BrowsePage from './pages/BrowsePage'
 import ContactMePage from './pages/ContactMePage'
 import FamilyPhotosPage from './pages/FamilyPhotosPage'
 import HomePage from './pages/HomePage'
@@ -11,6 +12,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/browse" element={<BrowsePage />} />
         <Route path="/family-photos" element={<FamilyPhotosPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/about-me" element={<AboutMePage />} />
