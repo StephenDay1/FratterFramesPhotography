@@ -41,7 +41,7 @@ function GalleryViewPage() {
               >
                 ← Galleries hub
               </Link>
-              <h1 className="mt-3 text-2xl font-semibold tracking-tight md:text-3xl">Your photos</h1>
+              <h1 className="mt-3 text-2xl font-semibold tracking-tight md:text-3xl">Your Photos</h1>
               <p className="mt-2 font-mono text-sm text-zinc-400">{galleryId}</p>
             </div>
           </div>

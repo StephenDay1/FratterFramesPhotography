@@ -7,6 +7,7 @@ import HomePage from './pages/HomePage'
 import PortraitsPage from './pages/PortraitsPage'
 import PricingPage from './pages/PricingPage'
 import GalleriesHubPage from './pages/galleries/GalleriesHubPage'
+import AdminLoginPage from './pages/galleries/AdminLoginPage'
 import GalleryAdminPage from './pages/galleries/GalleryAdminPage'
 import GalleryViewPage from './pages/galleries/GalleryViewPage'
 
@@ -22,6 +23,7 @@ function App() {
         <Route path="/portraits" element={<PortraitsPage />} />
         <Route path="/contact-me" element={<ContactMePage />} />
         <Route path="/galleries" element={<GalleriesHubPage />} />
+        <Route path="/admin" element={<AdminLoginPage />} />
         <Route path="/galleries/admin" element={<GalleryAdminPage />} />
         <Route path="/galleries/:galleryId" element={<GalleryViewPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

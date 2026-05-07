@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { ChevronDown, Copy } from 'lucide-react'
 import { auth } from '../../lib/firebase'
 import { r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
@@ -10,6 +11,7 @@ import {
   listGalleryPhotos,
   listOwnedGalleries,
 } from '../../services/galleryApi'
+import { deleteFromR2, uploadToR2WithPresign } from '../../services/r2UploadApi'
 import { defaultR2KeyForUpload, sanitizeObjectSegment } from './galleryUtils'
 
 async function userIsGalleryViewer(user) {
@@ -31,6 +33,9 @@ function GalleryAdminPage() {
   const [newTitle, setNewTitle] = useState('')
   const [newKey, setNewKey] = useState('')
   const [bulkKeys, setBulkKeys] = useState('')
+  const [advancedUploadOpen, setAdvancedUploadOpen] = useState(false)
+  const [copyStatus, setCopyStatus] = useState('')
+  const fileInputRef = useRef(null)
 
   const selected = useMemo(
     () => galleries.find((g) => g.id === selectedId) || null,
@@ -98,7 +103,7 @@ function GalleryAdminPage() {
   }
 
   if (!user) {
-    return <Navigate to="/galleries" replace />
+    return <Navigate to="/admin" replace />
   }
 
   if (viewerBlocked) {
@@ -115,8 +120,8 @@ function GalleryAdminPage() {
         >
           Sign out
         </button>
-        <Link className="mt-4 block text-sm text-zinc-400 underline" to="/galleries">
-          Back to galleries hub
+        <Link className="mt-4 block text-sm text-zinc-400 underline" to="/admin">
+          Back to admin login
         </Link>
       </main>
     )
@@ -163,7 +168,12 @@ function GalleryAdminPage() {
     setLoadError('')
     try {
       for (const file of files) {
-        const r2Key = defaultR2KeyForUpload(selectedId, file.name)
+        const expectedKey = defaultR2KeyForUpload(selectedId, file.name)
+        const { objectKey: r2Key } = await uploadToR2WithPresign({
+          galleryId: selectedId,
+          file,
+          objectKey: expectedKey,
+        })
         await addPhotoRecord({
           galleryId: selectedId,
           ownerUid: user.uid,
@@ -212,13 +222,40 @@ function GalleryAdminPage() {
   const onDeletePhoto = async (photoDocId) => {
     if (!selectedId) return
     setBusy(true)
+    setLoadError('')
     try {
+      const photo = photos.find((p) => p.id === photoDocId)
+      if (photo?.r2Key) {
+        try {
+          await deleteFromR2(photo.r2Key)
+        } catch (err) {
+          // Don't block Firestore cleanup if R2 delete fails — surface a warning,
+          // but still let the user remove the dangling record.
+          console.warn('R2 delete failed; removing Firestore record anyway', err)
+          setLoadError(`R2 delete failed (${err?.message || 'unknown'}); record removed.`)
+        }
+      }
       await deletePhotoRecord(selectedId, photoDocId)
       await refreshPhotos()
     } catch (err) {
-      setLoadError(err?.message || 'Could not delete photo record')
+      setLoadError(err?.message || 'Could not delete photo')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const onCopyShareLink = async () => {
+    if (!selectedId) return
+    const sharePath = `/galleries/${selectedId}`
+    const shareUrl =
+      typeof window !== 'undefined' ? `${window.location.origin}${sharePath}` : sharePath
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setCopyStatus('Copied!')
+      setTimeout(() => setCopyStatus(''), 1800)
+    } catch {
+      setCopyStatus('Copy failed')
+      setTimeout(() => setCopyStatus(''), 2200)
     }
   }
 
@@ -297,57 +334,126 @@ function GalleryAdminPage() {
           </form>
         </aside>
 
-        <section className="min-w-0 flex-1">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           {!selected ? (
             <p className="text-sm text-zinc-400">Select or create a gallery.</p>
           ) : (
             <>
               <header className="border-b border-zinc-800 pb-6">
                 <h2 className="text-2xl font-semibold">{selected.title || 'Untitled'}</h2>
-                <p className="mt-2 font-mono text-sm text-zinc-400">Share: /galleries/{selected.id}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <p className="font-mono text-sm text-zinc-400">Share: /galleries/{selected.id}</p>
+                  <button
+                    type="button"
+                    className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900"
+                    onClick={onCopyShareLink}
+                    aria-label="Copy share link"
+                    title="Copy share link"
+                  >
+                    <Copy className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  {copyStatus && <span className="text-xs text-zinc-400">{copyStatus}</span>}
+                </div>
                 <p className="mt-3 text-sm text-zinc-500">
                   Client link: send the gallery id <span className="font-mono text-zinc-300">{selected.id}</span> and
                   their passphrase (stored only for the Cloud Function check).
                 </p>
               </header>
 
-              <div className="mt-8 grid gap-8 lg:grid-cols-2">
-                <div>
+              <div className="mt-8 grid min-h-0 flex-1 auto-rows-[minmax(0,1fr)] grid-cols-1 gap-8 lg:grid-cols-2">
+                <div className="min-h-0">
                   <h3 className="text-sm font-semibold text-zinc-200">Register uploads</h3>
                   <p className="mt-2 text-xs text-zinc-500">
-                    Choosing files does not upload to R2 in this draft; it only writes Firestore
-                    rows using keys <span className="font-mono">galleries/{'{id}'}/filename</span>.
+                    File selection now uploads directly to R2 using a Cloudflare Worker presigned
+                    URL endpoint, then saves Firestore metadata.
                   </p>
-                  <label className="mt-4 inline-flex cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium hover:border-zinc-500">
-                    <input type="file" multiple className="hidden" onChange={onRegisterFiles} disabled={busy} />
-                    Choose files…
-                  </label>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="sr-only"
+                    onChange={onRegisterFiles}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={busy}
+                    className="mt-4 inline-flex rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {busy ? 'Uploading…' : 'Choose files…'}
+                  </button>
 
-                  <form className="mt-6 space-y-2" onSubmit={onBulkRegister}>
-                    <label className="block text-xs text-zinc-400">
-                      One R2 object key per line (or bare filenames)
-                      <textarea
-                        className="mt-1 min-h-[120px] w-full rounded-lg border border-zinc-700 bg-black px-3 py-2 font-mono text-xs text-white outline-none focus:border-zinc-500"
-                        value={bulkKeys}
-                        onChange={(ev) => setBulkKeys(ev.target.value)}
-                        placeholder={`galleries/${selected.id}/IMG_0001.jpg`}
-                      />
-                    </label>
+                  <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-950/40">
                     <button
-                      type="submit"
-                      disabled={busy}
-                      className="rounded-lg border border-zinc-600 px-3 py-2 text-xs font-semibold text-white hover:bg-zinc-900 disabled:opacity-50"
+                      type="button"
+                      aria-expanded={advancedUploadOpen}
+                      onClick={() => setAdvancedUploadOpen((v) => !v)}
+                      className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm font-medium text-zinc-300 transition hover:bg-zinc-900/70"
                     >
-                      Register keys
+                      <span>Advanced</span>
+                      <ChevronDown
+                        className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-200 ${
+                          advancedUploadOpen ? '-rotate-180' : ''
+                        }`}
+                        aria-hidden
+                      />
                     </button>
-                  </form>
+                    {advancedUploadOpen ? (
+                      <div className="space-y-3 border-t border-zinc-800 px-3 pb-4 pt-3">
+                        <div className="space-y-2 text-xs leading-relaxed text-zinc-500">
+                          <p>
+                            Register photos that are already in Cloudflare R2—for example uploaded from
+                            the dashboard, Wrangler, scripts, or another machine. This form does not
+                            upload files; it saves references in Firestore so this gallery can list those
+                            objects (thumbnails, deletes) using the stored keys.
+                          </p>
+                          <p>
+                            Enter one object key per line. A key is the path inside the bucket (not the
+                            public URL). Example for this gallery:{' '}
+                            <code className="rounded bg-zinc-900 px-1 py-0.5 font-mono text-[11px] text-zinc-300">
+                              galleries/{selected.id}/IMG_0001.jpg
+                            </code>
+                          </p>
+                          <ul className="list-inside list-disc space-y-1 pl-0.5 text-zinc-500">
+                            <li>
+                              If a line contains <code className="font-mono text-zinc-400">/</code>, it is
+                              used as the full key.
+                            </li>
+                            <li>
+                              If a line is only a filename (no slashes), we prefix{' '}
+                              <code className="font-mono text-zinc-400">galleries/{selected.id}/</code>{' '}
+                              automatically.
+                            </li>
+                          </ul>
+                        </div>
+                        <form className="space-y-2" onSubmit={onBulkRegister}>
+                          <label className="block text-xs text-zinc-400">
+                            Object keys (one per line)
+                            <textarea
+                              className="mt-1 min-h-[120px] w-full rounded-lg border border-zinc-700 bg-black px-3 py-2 font-mono text-xs text-white outline-none focus:border-zinc-500"
+                              value={bulkKeys}
+                              onChange={(ev) => setBulkKeys(ev.target.value)}
+                              placeholder={`galleries/${selected.id}/IMG_0001.jpg`}
+                            />
+                          </label>
+                          <button
+                            type="submit"
+                            disabled={busy}
+                            className="rounded-lg border border-zinc-600 px-3 py-2 text-xs font-semibold text-white hover:bg-zinc-900 disabled:opacity-50"
+                          >
+                            Register keys
+                          </button>
+                        </form>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
 
-                <div>
+                <div className="flex min-h-0 flex-col lg:h-full">
                   <h3 className="text-sm font-semibold text-zinc-200">
                     Photos ({photos.length})
                   </h3>
-                  <ul className="mt-4 max-h-[480px] space-y-3 overflow-y-auto pr-1">
+                  <ul className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 lg:max-h-none">
                     {photos.map((p) => {
                       const url = r2PublicUrl(p.r2Key)
                       return (
@@ -373,7 +479,7 @@ function GalleryAdminPage() {
                               onClick={() => onDeletePhoto(p.id)}
                               disabled={busy}
                             >
-                              Remove record
+                              Delete
                             </button>
                           </div>
                         </li>

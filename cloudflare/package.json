@@ -1,0 +1,11 @@
+{
+  "name": "r2-signer",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cloudflare Worker that signs S3-presigned PUT URLs for direct browser uploads to R2.",
+  "main": "r2-signer-worker.js",
+  "dependencies": {
+    "aws4fetch": "^1.0.20"
+  }
+}

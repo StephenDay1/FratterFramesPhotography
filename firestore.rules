@@ -12,9 +12,16 @@ service cloud.firestore {
 
       // Photos: owner manages; viewers authenticate via custom token from verifyGalleryKey.
       match /photos/{photoId} {
-        allow read: if request.auth != null && (
+        // Per-document read: allowed for the matching gallery viewer or the owner.
+        allow get: if request.auth != null && (
           request.auth.token.galleryId == galleryId
           || resource.data.ownerUid == request.auth.uid
+        );
+        // List/query: rule must be satisfiable from the query alone, not per-doc.
+        // Either the caller is the gallery's matching viewer, or they own the parent gallery.
+        allow list: if request.auth != null && (
+          request.auth.token.galleryId == galleryId
+          || get(/databases/$(database)/documents/galleries/$(galleryId)).data.ownerUid == request.auth.uid
         );
         allow create: if request.auth != null
           && get(/databases/$(database)/documents/galleries/$(galleryId)).data.ownerUid == request.auth.uid
