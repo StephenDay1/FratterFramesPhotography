@@ -46,6 +46,32 @@ function GalleryAdminPage() {
     [galleries, selectedId],
   )
 
+  // Scroll lock
+  useEffect(() => {
+    const previousHtmlOverflow = document.documentElement.style.overflow
+    const previousBodyOverflow = document.body.style.overflow
+    const mediaQuery = window.matchMedia('(min-width: 768px)')
+
+    const applyScrollLock = () => {
+      if (mediaQuery.matches) {
+        document.documentElement.style.overflow = 'hidden'
+        document.body.style.overflow = 'hidden'
+      } else {
+        document.documentElement.style.overflow = previousHtmlOverflow
+        document.body.style.overflow = previousBodyOverflow
+      }
+    }
+
+    applyScrollLock()
+    mediaQuery.addEventListener('change', applyScrollLock)
+
+    return () => {
+      mediaQuery.removeEventListener('change', applyScrollLock)
+      document.documentElement.style.overflow = previousHtmlOverflow
+      document.body.style.overflow = previousBodyOverflow
+    }
+  }, [])
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u)
@@ -320,7 +346,7 @@ function GalleryAdminPage() {
 
   return (
     <main className="h-screen overflow-hidden bg-black text-white">
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col gap-8 overflow-hidden px-6 py-6 lg:flex-row">
+      <div className="mx-auto flex h-full min-h-0 w-full flex-col gap-8 overflow-hidden px-6 py-6 lg:flex-row">
         <aside className="flex min-h-0 w-full shrink-0 flex-col lg:w-72">
           <Link to="/galleries" className="text-sm text-zinc-400 transition hover:text-white">
             ← Hub
