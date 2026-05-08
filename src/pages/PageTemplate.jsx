@@ -21,7 +21,7 @@ function PageTemplate({ title, description, ctaLabel}) {
 
           {ctaLabel && ctaLabel !== '' && <button
             type="button"
-            className="mt-8 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
+            className="mt-8 cursor-pointer rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
             >
               {ctaLabel}
             </button>

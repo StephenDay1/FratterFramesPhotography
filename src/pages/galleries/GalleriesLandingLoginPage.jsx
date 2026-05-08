@@ -1,12 +1,16 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { signInWithCustomToken } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
-import { verifyGalleryKeyCallable } from '../../services/galleryApi'
+import { setStoredGalleryTitle, verifyGalleryKeyCallable } from '../../services/galleryApi'
 
 function GalleriesHubPage() {
+  const location = useLocation()
   const navigate = useNavigate()
-  const [clientGalleryId, setClientGalleryId] = useState('')
+  const [clientGalleryId, setClientGalleryId] = useState(() => {
+    const fromGalleryId = location.state?.from
+    return typeof fromGalleryId === 'string' ? fromGalleryId : ''
+  })
   const [clientKey, setClientKey] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -17,7 +21,8 @@ function GalleriesHubPage() {
     setBusy(true)
     try {
       const gid = clientGalleryId.trim()
-      const { token } = await verifyGalleryKeyCallable(gid, clientKey)
+      const { token, title } = await verifyGalleryKeyCallable(gid, clientKey)
+      setStoredGalleryTitle(gid, title)
       await signInWithCustomToken(auth, token)
       navigate(`/galleries/${gid}`, { replace: true })
     } catch (err) {
@@ -38,11 +43,7 @@ function GalleriesHubPage() {
         </Link>
 
         <header className="mb-10">
-          <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Galleries</h1>
-          <p className="mt-3 max-w-2xl text-base leading-relaxed text-zinc-300">
-            Client access portal. Enter the gallery link id and private key your photographer sent
-            you.
-          </p>
+          <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Fratter Frame Galleries</h1>
         </header>
 
         {error && (
@@ -53,25 +54,23 @@ function GalleriesHubPage() {
 
         <div className="grid gap-10">
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-6 md:p-8">
-            <h2 className="text-lg font-semibold">Client access</h2>
+            <h2 className="text-lg font-semibold">Access your gallery</h2>
             <p className="mt-2 text-sm text-zinc-400">
-              Enter the gallery id from your link and your private key. This calls the{' '}
-              <code className="text-zinc-200">verifyGalleryKey</code> Cloud Function, which mints a
-              short-lived custom Firebase session scoped to that gallery.
+              Enter the gallery id from your link and your access key to access your gallery.
             </p>
             <form className="mt-6 space-y-4" onSubmit={onClientSubmit}>
               <label className="block text-sm text-zinc-300">
-                Gallery id
+                Gallery ID
                 <input
                   className="mt-1 w-full rounded-lg border border-zinc-700 bg-black px-3 py-2 font-mono text-sm text-white outline-none focus:border-zinc-500"
                   value={clientGalleryId}
                   onChange={(ev) => setClientGalleryId(ev.target.value)}
-                  placeholder="e.g. f3c2…"
+                  placeholder="e.g. f3c2e24…"
                   required
                 />
               </label>
               <label className="block text-sm text-zinc-300">
-                Access key
+                Access Key
                 <input
                   className="mt-1 w-full rounded-lg border border-zinc-700 bg-black px-3 py-2 text-white outline-none focus:border-zinc-500"
                   type="password"
@@ -83,7 +82,7 @@ function GalleriesHubPage() {
               <button
                 type="submit"
                 disabled={busy}
-                className="w-full rounded-xl border border-zinc-600 bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-50"
+                className="w-full cursor-pointer rounded-xl border border-zinc-600 bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-50"
               >
                 {busy ? 'Unlocking…' : 'Open gallery'}
               </button>

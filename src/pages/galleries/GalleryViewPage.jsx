@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { r2PublicUrl } from '../../lib/r2PublicUrl'
-import { listGalleryPhotos } from '../../services/galleryApi'
+import { getGalleryTitleForView, listGalleryPhotos } from '../../services/galleryApi'
 import RequireGalleryAccess from './RequireGalleryAccess'
 
 function GalleryViewPage() {
@@ -9,19 +9,26 @@ function GalleryViewPage() {
   const [photos, setPhotos] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [galleryTitle, setGalleryTitle] = useState(null)
 
   useEffect(() => {
     let cancelled = false
+    setGalleryTitle(null)
     ;(async () => {
       setLoading(true)
       setError('')
+      const titlePromise = getGalleryTitleForView(galleryId)
       try {
         const rows = await listGalleryPhotos(galleryId)
         if (!cancelled) setPhotos(rows)
       } catch (err) {
         if (!cancelled) setError(err?.message || 'Could not load photos')
       } finally {
-        if (!cancelled) setLoading(false)
+        const title = await titlePromise
+        if (!cancelled) {
+          setGalleryTitle(title)
+          setLoading(false)
+        }
       }
     })()
     return () => {
@@ -41,8 +48,10 @@ function GalleryViewPage() {
               >
                 ← Galleries hub
               </Link>
-              <h1 className="mt-3 text-2xl font-semibold tracking-tight md:text-3xl">Your Photos</h1>
-              <p className="mt-2 font-mono text-sm text-zinc-400">{galleryId}</p>
+              <h1 className="mt-3 text-2xl font-semibold tracking-tight md:text-3xl">
+                {galleryTitle ?? 'Your Gallery'}
+              </h1>
+              {/* <p className="mt-2 font-mono text-sm text-zinc-400">{galleryId}</p> */}
             </div>
           </div>
 
@@ -54,10 +63,14 @@ function GalleryViewPage() {
           )}
 
           {!loading && !error && photos.length === 0 && (
-            <p className="text-sm text-zinc-400">
-              No photo records yet. Your photographer still needs to register uploads in Firestore
-              (and place files in R2 at the matching keys).
-            </p>
+            <>
+              <p className="text-sm text-zinc-400">
+                No photo records yet. Your photographer still needs to upload photos to the gallery.
+              </p>
+              <p className="text-sm text-zinc-400">
+                If you think this is an error, please contact your photographer.
+              </p>
+            </>
           )}
 
           <ul className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">

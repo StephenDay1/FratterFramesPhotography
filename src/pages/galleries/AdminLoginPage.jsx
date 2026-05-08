@@ -74,7 +74,7 @@ function AdminLoginPage() {
             <button
               type="submit"
               disabled={busy}
-              className="w-full rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:opacity-50"
+              className="w-full cursor-pointer rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:opacity-50"
             >
               {busy ? 'Signing in…' : 'Continue to admin'}
             </button>

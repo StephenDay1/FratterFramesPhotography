@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
-import { ChevronDown, Copy } from 'lucide-react'
+import { ChevronDown, Copy, CopyCheck, Trash2 } from 'lucide-react'
 import { auth } from '../../lib/firebase'
 import { r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
@@ -11,7 +11,7 @@ import {
   listGalleryPhotos,
   listOwnedGalleries,
 } from '../../services/galleryApi'
-import { deleteFromR2, uploadToR2WithPresign } from '../../services/r2UploadApi'
+import { deleteFromR2, getR2StorageUsage, uploadToR2WithPresign } from '../../services/r2UploadApi'
 import { defaultR2KeyForUpload, sanitizeObjectSegment } from './galleryUtils'
 
 async function userIsGalleryViewer(user) {
@@ -34,7 +34,9 @@ function GalleryAdminPage() {
   const [newKey, setNewKey] = useState('')
   const [bulkKeys, setBulkKeys] = useState('')
   const [advancedUploadOpen, setAdvancedUploadOpen] = useState(false)
-  const [copyStatus, setCopyStatus] = useState('')
+  const [copyStatus, setCopyStatus] = useState(false)
+  const [storageTotalBytes, setStorageTotalBytes] = useState(0)
+  const [storageByGallery, setStorageByGallery] = useState({})
   const fileInputRef = useRef(null)
 
   const selected = useMemo(
@@ -84,7 +86,14 @@ function GalleryAdminPage() {
     ;(async () => {
       try {
         const rows = await listGalleryPhotos(selectedId)
-        if (!cancelled) setPhotos(rows)
+        if (!cancelled) {
+          setPhotos(rows)
+          setGalleries((prev) =>
+            prev.map((gallery) =>
+              gallery.id === selectedId ? { ...gallery, photoCount: rows.length } : gallery,
+            ),
+          )
+        }
       } catch {
         if (!cancelled) setPhotos([])
       }
@@ -93,6 +102,28 @@ function GalleryAdminPage() {
       cancelled = true
     }
   }, [selectedId, viewerBlocked])
+
+  useEffect(() => {
+    if (!user || viewerBlocked) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const usage = await getR2StorageUsage()
+        if (!cancelled) {
+          setStorageTotalBytes(usage.totalBytes || 0)
+          setStorageByGallery(usage.byGallery || {})
+        }
+      } catch {
+        if (!cancelled) {
+          setStorageTotalBytes(0)
+          setStorageByGallery({})
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [user, viewerBlocked])
 
   if (!authReady) {
     return (
@@ -115,7 +146,7 @@ function GalleryAdminPage() {
         </p>
         <button
           type="button"
-          className="mt-6 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black"
+          className="mt-6 cursor-pointer rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black"
           onClick={() => signOut(auth)}
         >
           Sign out
@@ -127,16 +158,43 @@ function GalleryAdminPage() {
     )
   }
 
+  const refreshStorageUsage = async () => {
+    try {
+      const usage = await getR2StorageUsage()
+      setStorageTotalBytes(usage.totalBytes || 0)
+      setStorageByGallery(usage.byGallery || {})
+    } catch {
+      // Do not block admin actions if usage endpoint is unavailable.
+    }
+  }
+
   const refreshGalleries = async () => {
     if (!user) return
     const rows = await listOwnedGalleries(user.uid)
     setGalleries(rows)
+    await refreshStorageUsage()
   }
 
   const refreshPhotos = async () => {
     if (!selectedId) return
     const rows = await listGalleryPhotos(selectedId)
     setPhotos(rows)
+    setGalleries((prev) =>
+      prev.map((gallery) =>
+        gallery.id === selectedId ? { ...gallery, photoCount: rows.length } : gallery,
+      ),
+    )
+    await refreshStorageUsage()
+  }
+
+  const formatBytes = (bytes) => {
+    const value = Number(bytes) || 0
+    if (value <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    const idx = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+    const sized = value / 1024 ** idx
+    const digits = sized >= 100 || idx === 0 ? 0 : sized >= 10 ? 1 : 2
+    return `${sized.toFixed(digits)} ${units[idx]}`
   }
 
   const onCreateGallery = async (e) => {
@@ -251,18 +309,17 @@ function GalleryAdminPage() {
       typeof window !== 'undefined' ? `${window.location.origin}${sharePath}` : sharePath
     try {
       await navigator.clipboard.writeText(shareUrl)
-      setCopyStatus('Copied!')
-      setTimeout(() => setCopyStatus(''), 1800)
+      setCopyStatus(true)
+      setTimeout(() => setCopyStatus(false), 10000)
     } catch {
-      setCopyStatus('Copy failed')
-      setTimeout(() => setCopyStatus(''), 2200)
+      setCopyStatus(false)
     }
   }
 
   return (
-    <main className="min-h-screen bg-black text-white">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-6 py-10 lg:flex-row">
-        <aside className="w-full shrink-0 lg:w-72">
+    <main className="h-screen overflow-hidden bg-black text-white">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col gap-8 overflow-hidden px-6 py-6 lg:flex-row">
+        <aside className="flex min-h-0 w-full shrink-0 flex-col lg:w-72">
           <Link to="/galleries" className="text-sm text-zinc-400 transition hover:text-white">
             ← Hub
           </Link>
@@ -270,16 +327,17 @@ function GalleryAdminPage() {
             <h1 className="text-lg font-semibold">Admin</h1>
             <button
               type="button"
-              className="text-xs font-medium text-zinc-400 underline"
+              className="text-xs font-medium text-zinc-400 cursor-pointer transition hover:text-white"
               onClick={() => signOut(auth)}
             >
               Sign out
             </button>
           </div>
           <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-            Firestore stores gallery metadata and per-photo R2 keys. Upload bytes to R2 with a
-            Worker or presigned URLs, then register keys here (or select local files to generate
-            expected keys).
+            Manage your galleries and photos here.  Storage is running on Cloudflare R2 with Firebase Firestore for metadata.
+          </p>
+          <p className="mt-3 text-xs text-zinc-400">
+            Total storage used: <span className="font-mono text-zinc-200">~{formatBytes(storageTotalBytes)}</span>
           </p>
 
           {loadError && (
@@ -288,13 +346,13 @@ function GalleryAdminPage() {
             </p>
           )}
 
-          <div className="mt-6 space-y-2">
+          <div className="mt-6 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {galleries.map((g) => (
               <button
                 key={g.id}
                 type="button"
                 onClick={() => setSelectedId(g.id)}
-                className={`flex w-full flex-col rounded-lg border px-3 py-2 text-left text-sm transition ${
+                className={`flex w-full cursor-pointer flex-col rounded-lg border px-3 py-2 text-left text-sm transition ${
                   g.id === selectedId
                     ? 'border-white bg-zinc-900'
                     : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-600'
@@ -302,6 +360,8 @@ function GalleryAdminPage() {
               >
                 <span className="font-medium">{g.title || 'Untitled'}</span>
                 <span className="mt-1 font-mono text-xs text-zinc-500">{g.id}</span>
+                <span className="mt-1 text-xs text-zinc-400">
+                {g.photoCount ? `${g.photoCount} photos` : 'No photos yet'} · {g.photoCount ? formatBytes(storageByGallery[g.id] || 0) : '0 B'}                </span>
               </button>
             ))}
             {galleries.length === 0 && (
@@ -309,7 +369,7 @@ function GalleryAdminPage() {
             )}
           </div>
 
-          <form className="mt-8 space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4" onSubmit={onCreateGallery}>
+          <form className="mt-6 space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4" onSubmit={onCreateGallery}>
             <h2 className="text-sm font-semibold">New gallery</h2>
             <input
               className="w-full rounded-lg border border-zinc-700 bg-black px-3 py-2 text-sm outline-none focus:border-zinc-500"
@@ -327,14 +387,14 @@ function GalleryAdminPage() {
             <button
               type="submit"
               disabled={busy}
-              className="w-full rounded-lg bg-white py-2 text-xs font-semibold text-black disabled:opacity-50"
+              className="w-full cursor-pointer rounded-lg bg-white py-2 text-xs font-semibold text-black disabled:opacity-50"
             >
               Create
             </button>
           </form>
         </aside>
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           {!selected ? (
             <p className="text-sm text-zinc-400">Select or create a gallery.</p>
           ) : (
@@ -345,22 +405,20 @@ function GalleryAdminPage() {
                   <p className="font-mono text-sm text-zinc-400">Share: /galleries/{selected.id}</p>
                   <button
                     type="button"
-                    className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900"
+                    className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
                     onClick={onCopyShareLink}
                     aria-label="Copy share link"
                     title="Copy share link"
                   >
-                    <Copy className="h-4 w-4" aria-hidden="true" />
+                    {copyStatus ? <CopyCheck className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
                   </button>
-                  {copyStatus && <span className="text-xs text-zinc-400">{copyStatus}</span>}
                 </div>
                 <p className="mt-3 text-sm text-zinc-500">
-                  Client link: send the gallery id <span className="font-mono text-zinc-300">{selected.id}</span> and
-                  their passphrase (stored only for the Cloud Function check).
+                  Client access key: <span className="font-mono text-zinc-300">{selected.clientAccessKey}</span>
                 </p>
               </header>
 
-              <div className="mt-8 grid min-h-0 flex-1 auto-rows-[minmax(0,1fr)] grid-cols-1 gap-8 lg:grid-cols-2">
+              <div className="mt-8 grid min-h-0 flex-1 auto-rows-[minmax(0,1fr)] grid-cols-1 gap-8 overflow-hidden lg:grid-cols-2">
                 <div className="min-h-0">
                   <h3 className="text-sm font-semibold text-zinc-200">Register uploads</h3>
                   <p className="mt-2 text-xs text-zinc-500">
@@ -378,7 +436,7 @@ function GalleryAdminPage() {
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={busy}
-                    className="mt-4 inline-flex rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="mt-4 inline-flex cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {busy ? 'Uploading…' : 'Choose files…'}
                   </button>
@@ -388,7 +446,7 @@ function GalleryAdminPage() {
                       type="button"
                       aria-expanded={advancedUploadOpen}
                       onClick={() => setAdvancedUploadOpen((v) => !v)}
-                      className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm font-medium text-zinc-300 transition hover:bg-zinc-900/70"
+                      className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2.5 text-left text-sm font-medium text-zinc-300 transition hover:bg-zinc-900/70"
                     >
                       <span>Advanced</span>
                       <ChevronDown
@@ -439,7 +497,7 @@ function GalleryAdminPage() {
                           <button
                             type="submit"
                             disabled={busy}
-                            className="rounded-lg border border-zinc-600 px-3 py-2 text-xs font-semibold text-white hover:bg-zinc-900 disabled:opacity-50"
+                            className="cursor-pointer rounded-lg border border-zinc-600 px-3 py-2 text-xs font-semibold text-white hover:bg-zinc-900 disabled:opacity-50"
                           >
                             Register keys
                           </button>
@@ -451,7 +509,7 @@ function GalleryAdminPage() {
 
                 <div className="flex min-h-0 flex-col lg:h-full">
                   <h3 className="text-sm font-semibold text-zinc-200">
-                    Photos ({photos.length})
+                  {photos.length ? `${photos.length} photos` : 'No photos yet'} · {photos.length ? formatBytes(storageByGallery[selected.id] || 0) : '0 B'}
                   </h3>
                   <ul className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 lg:max-h-none">
                     {photos.map((p) => {
@@ -472,16 +530,24 @@ function GalleryAdminPage() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm">{p.filename}</p>
-                            <p className="truncate font-mono text-xs text-zinc-500">{p.r2Key}</p>
-                            <button
+                            <p dir="rtl" className="truncate text-right font-mono text-xs text-zinc-500">{p.r2Key}</p>
+                            {/* <button
                               type="button"
                               className="mt-1 text-xs text-red-300 underline"
                               onClick={() => onDeletePhoto(p.id)}
                               disabled={busy}
                             >
                               Delete
-                            </button>
+                            </button> */}
                           </div>
+                          <button
+                            type="button"
+                            className="mt-1 text-xs text-zinc-500 hover:text-red-300 cursor-pointer transition"
+                            onClick={() => onDeletePhoto(p.id)}
+                            disabled={busy}
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                          </button>
                         </li>
                       )
                     })}

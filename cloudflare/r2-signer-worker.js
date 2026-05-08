@@ -16,6 +16,7 @@
  * Endpoints:
  *   POST /sign-upload     -> { uploadUrl, objectKey }   10-minute presigned PUT URL
  *   POST /delete-object   -> { deleted: true }          server-side DELETE
+ *   POST /storage-usage   -> { totalBytes, byGallery }  bucket usage summary
  *
  * All endpoints require: Authorization: Bearer <Firebase ID token>.
  */
@@ -168,6 +169,99 @@ async function handleDeleteObject(request, env, origin) {
   return json({ deleted: true, objectKey }, 200, env, origin)
 }
 
+function parseXmlTagValue(xml, tagName) {
+  const re = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`)
+  const match = xml.match(re)
+  return match?.[1] || ''
+}
+
+function decodeXmlEntities(value) {
+  return String(value || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+}
+
+function usageGalleryIdFromKey(key) {
+  const match = String(key || '').match(/^galleries\/([^/]+)\//)
+  return match?.[1] || null
+}
+
+function parseListObjectsPage(xmlText) {
+  const contents = xmlText.match(/<Contents>[\s\S]*?<\/Contents>/g) || []
+  const objects = contents.map((entry) => {
+    const key = decodeXmlEntities(parseXmlTagValue(entry, 'Key'))
+    const size = Number.parseInt(parseXmlTagValue(entry, 'Size'), 10)
+    return { key, size: Number.isFinite(size) ? size : 0 }
+  })
+  const nextToken = decodeXmlEntities(parseXmlTagValue(xmlText, 'NextContinuationToken'))
+  const isTruncated = parseXmlTagValue(xmlText, 'IsTruncated') === 'true'
+  return { objects, nextToken, isTruncated }
+}
+
+async function listAllBucketUsage(env, client) {
+  let continuationToken = ''
+  let totalBytes = 0
+  let objectCount = 0
+  const byGallery = {}
+
+  while (true) {
+    const listUrl = new URL(
+      `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${encodeURIComponent(env.R2_BUCKET_NAME)}`,
+    )
+    listUrl.searchParams.set('list-type', '2')
+    listUrl.searchParams.set('max-keys', '1000')
+    if (continuationToken) {
+      listUrl.searchParams.set('continuation-token', continuationToken)
+    }
+
+    const signed = await client.sign(new Request(listUrl, { method: 'GET' }))
+    const listRes = await fetch(signed)
+    if (!listRes.ok) {
+      const detail = await listRes.text().catch(() => '')
+      throw new Error(`R2 list failed (${listRes.status}) ${detail}`.trim())
+    }
+
+    const xml = await listRes.text()
+    const page = parseListObjectsPage(xml)
+    for (const obj of page.objects) {
+      totalBytes += obj.size
+      objectCount += 1
+      const galleryId = usageGalleryIdFromKey(obj.key)
+      if (galleryId) {
+        byGallery[galleryId] = (byGallery[galleryId] || 0) + obj.size
+      }
+    }
+
+    if (!page.isTruncated || !page.nextToken) break
+    continuationToken = page.nextToken
+  }
+
+  return { totalBytes, objectCount, byGallery }
+}
+
+async function handleStorageUsage(request, env, origin) {
+  const authResult = await authenticate(request, env)
+  if (authResult.error) return json({ error: authResult.error }, authResult.status, env, origin)
+
+  const r2 = buildR2Client(env)
+  if (r2.error) return json({ error: r2.error }, r2.status, env, origin)
+
+  try {
+    const usage = await listAllBucketUsage(env, r2.client)
+    return json(usage, 200, env, origin)
+  } catch (err) {
+    return json(
+      { error: err?.message || 'Could not calculate storage usage' },
+      502,
+      env,
+      origin,
+    )
+  }
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('origin') || ''
@@ -183,6 +277,10 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/delete-object') {
       return handleDeleteObject(request, env, origin)
+    }
+
+    if (request.method === 'POST' && url.pathname === '/storage-usage') {
+      return handleStorageUsage(request, env, origin)
     }
 
     return json({ error: 'Not found' }, 404, env, origin)

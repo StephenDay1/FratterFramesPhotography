@@ -77,3 +77,28 @@ export async function deleteFromR2(objectKey) {
     throw new Error(`Could not delete from R2 (${res.status})`)
   }
 }
+
+export async function getR2StorageUsage() {
+  const signerUrl = getSignerUrl()
+  const authHeader = await getAdminAuthHeader()
+
+  const res = await fetch(`${signerUrl}/storage-usage`, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader,
+    },
+  })
+
+  if (!res.ok) {
+    throw new Error(`Could not load storage usage (${res.status})`)
+  }
+
+  const data = await res.json()
+  return {
+    totalBytes: Number.isFinite(data?.totalBytes) ? data.totalBytes : 0,
+    byGallery:
+      data?.byGallery && typeof data.byGallery === 'object' && !Array.isArray(data.byGallery)
+        ? data.byGallery
+        : {},
+  }
+}

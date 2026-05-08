@@ -104,6 +104,50 @@ exports.verifyGalleryKey = onCall(
   },
 )
 
+/** Returns gallery title for authorized owner/viewer sessions. */
+exports.getGalleryPublicInfo = onCall(
+  {
+    region: 'us-central1',
+    ...(appspotServiceAccount ? { serviceAccount: appspotServiceAccount } : {}),
+    invoker: 'public',
+    cors: true,
+    ingressSettings: 'ALLOW_ALL',
+  },
+  async (request) => {
+    const galleryId =
+      typeof request.data?.galleryId === 'string' ? request.data.galleryId.trim() : ''
+    if (!galleryId) {
+      throw new HttpsError('invalid-argument', 'galleryId is required')
+    }
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'Sign in required')
+    }
+
+    const ref = admin.firestore().doc(`galleries/${galleryId}`)
+    const snap = await ref.get()
+    if (!snap.exists) {
+      throw new HttpsError('not-found', 'Gallery not found')
+    }
+
+    const data = snap.data()
+    const token = request.auth.token || {}
+    const isViewer =
+      token.galleryViewer === true &&
+      typeof token.galleryId === 'string' &&
+      token.galleryId === galleryId
+    const isOwner = data.ownerUid === request.auth.uid
+
+    if (!isViewer && !isOwner) {
+      throw new HttpsError('permission-denied', 'Not allowed')
+    }
+
+    const title =
+      typeof data.title === 'string' && data.title.trim() ? data.title.trim() : 'Untitled shoot'
+
+    return { title }
+  },
+)
+
 /** Returns display title for users who may not read `galleries/{id}` from the client (viewers). */
 exports.getGalleryPublicInfo = onCall(
   {

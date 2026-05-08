@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   orderBy,
   query,
@@ -24,7 +25,12 @@ function sortByCreatedAtDesc(docs) {
 export async function listOwnedGalleries(ownerUid) {
   const q = query(collection(db, 'galleries'), where('ownerUid', '==', ownerUid))
   const snap = await getDocs(q)
-  const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  const rows = await Promise.all(
+    snap.docs.map(async (d) => {
+      const photosSnap = await getDocs(collection(db, 'galleries', d.id, 'photos'))
+      return { id: d.id, ...d.data(), photoCount: photosSnap.size }
+    }),
+  )
   return sortByCreatedAtDesc(rows)
 }
 
@@ -60,6 +66,50 @@ export async function addPhotoRecord({ galleryId, ownerUid, r2Key, filename }) {
 
 export async function deletePhotoRecord(galleryId, photoDocId) {
   await deleteDoc(doc(db, 'galleries', galleryId, 'photos', photoDocId))
+}
+
+const GALLERY_TITLE_STORAGE_PREFIX = 'ffGalleryTitle:'
+
+export function setStoredGalleryTitle(galleryId, title) {
+  if (!galleryId || typeof title !== 'string' || !title.trim()) return
+  try {
+    sessionStorage.setItem(GALLERY_TITLE_STORAGE_PREFIX + galleryId, title.trim())
+  } catch {
+    // ignore storage errors
+  }
+}
+
+async function getGalleryTitleViaCallable(galleryId) {
+  const fn = httpsCallable(functions, 'getGalleryPublicInfo')
+  const result = await fn({ galleryId })
+  const title = result.data?.title
+  return typeof title === 'string' && title.trim() ? title.trim() : null
+}
+
+export async function getGalleryTitleForView(galleryId) {
+  if (!galleryId) return null
+  try {
+    const snap = await getDoc(doc(db, 'galleries', galleryId))
+    if (snap.exists()) {
+      const title = snap.data()?.title
+      if (typeof title === 'string' && title.trim()) return title.trim()
+    }
+  } catch {
+    // expected for viewer tokens due to Firestore rules
+  }
+  try {
+    const callableTitle = await getGalleryTitleViaCallable(galleryId)
+    if (callableTitle) return callableTitle
+  } catch {
+    // callable may not be deployed yet
+  }
+  try {
+    const stored = sessionStorage.getItem(GALLERY_TITLE_STORAGE_PREFIX + galleryId)
+    if (stored?.trim()) return stored.trim()
+  } catch {
+    // ignore storage errors
+  }
+  return null
 }
 
 export async function verifyGalleryKeyCallable(galleryId, key) {
