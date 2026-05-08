@@ -30,7 +30,7 @@ function HomePage() {
   const tiles = [
     {
       type: 'title',
-      title: 'Fratter Frames Photography',
+      title: 'Fratter Frame Photography',
       description: 'Recently had a photoshoot? Click here to find your photos.',
       redirectUrl: '/galleries',
       className: 'md:col-start-3 md:col-span-2 md:row-start-3 md:row-span-1',
@@ -69,7 +69,7 @@ function HomePage() {
     {
       src: 'https://images.unsplash.com/photo-1473445361085-b9a07f55608b?auto=format&fit=crop&w=900&q=80',
       alt: 'Minimal architecture',
-      coverText: 'About Fratter Frames',
+      coverText: 'About Fratter Frame',
       redirectUrl: '/about-me',
       mobileHalf: true,
       className: 'md:col-start-1 md:col-span-2 md:row-start-3 md:row-span-2',

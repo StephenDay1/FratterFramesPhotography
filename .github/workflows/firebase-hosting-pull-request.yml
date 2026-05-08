@@ -20,6 +20,7 @@ jobs:
       VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
       VITE_FIREBASE_FUNCTIONS_REGION: ${{ secrets.VITE_FIREBASE_FUNCTIONS_REGION }}
       VITE_R2_PUBLIC_BASE_URL: ${{ secrets.VITE_R2_PUBLIC_BASE_URL }}
+      VITE_R2_SIGNER_URL: ${{ secrets.VITE_R2_SIGNER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
