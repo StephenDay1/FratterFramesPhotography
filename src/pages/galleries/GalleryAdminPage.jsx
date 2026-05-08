@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
-import { ChevronDown, Copy, CopyCheck, Trash2 } from 'lucide-react'
+import {
+  ChevronDown, Copy, CopyCheck, SquareArrowOutUpRight, Trash2
+} from 'lucide-react'
 import { auth } from '../../lib/firebase'
 import { r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
@@ -411,6 +413,15 @@ function GalleryAdminPage() {
                     title="Copy share link"
                   >
                     {copyStatus ? <CopyCheck className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
+                    onClick={onCopyShareLink}
+                    aria-label="View gallery"
+                    title="View gallery"
+                  >
+                    <Link to={`/galleries/${selected.id}`} target="_blank" className="text-xs"><SquareArrowOutUpRight className="h-4 w-4" aria-hidden="true" /></Link>
                   </button>
                 </div>
                 <p className="mt-3 text-sm text-zinc-500">
