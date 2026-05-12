@@ -1,4 +1,4 @@
-const { randomUUID } = require('crypto')
+const { randomUUID, createHmac } = require('crypto')
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const { logger } = require('firebase-functions')
 const admin = require('firebase-admin')
@@ -148,8 +148,8 @@ exports.getGalleryPublicInfo = onCall(
   },
 )
 
-/** Returns display title for users who may not read `galleries/{id}` from the client (viewers). */
-exports.getGalleryPublicInfo = onCall(
+/** Short-lived signed URL for browser download (CORS-friendly proxy to R2). */
+exports.issueGalleryDownloadTicket = onCall(
   {
     region: 'us-central1',
     ...(appspotServiceAccount ? { serviceAccount: appspotServiceAccount } : {}),
@@ -160,11 +160,24 @@ exports.getGalleryPublicInfo = onCall(
   async (request) => {
     const galleryId =
       typeof request.data?.galleryId === 'string' ? request.data.galleryId.trim() : ''
+    const objectKey =
+      typeof request.data?.objectKey === 'string' ? request.data.objectKey.trim() : ''
+    const filenameIn =
+      typeof request.data?.filename === 'string' ? request.data.filename.trim() : ''
+
     if (!galleryId) {
       throw new HttpsError('invalid-argument', 'galleryId is required')
     }
+    if (!objectKey) {
+      throw new HttpsError('invalid-argument', 'objectKey is required')
+    }
     if (!request.auth?.uid) {
       throw new HttpsError('unauthenticated', 'Sign in required')
+    }
+
+    const expectedPrefix = `galleries/${galleryId}/`
+    if (!objectKey.startsWith(expectedPrefix)) {
+      throw new HttpsError('invalid-argument', 'objectKey does not belong to this gallery')
     }
 
     const ref = admin.firestore().doc(`galleries/${galleryId}`)
@@ -185,9 +198,44 @@ exports.getGalleryPublicInfo = onCall(
       throw new HttpsError('permission-denied', 'Not allowed')
     }
 
-    const title =
-      typeof data.title === 'string' && data.title.trim() ? data.title.trim() : 'Untitled shoot'
+    const signerUrl = String(process.env.R2_SIGNER_URL || '').replace(/\/+$/, '')
+    const secret = String(process.env.GALLERY_DOWNLOAD_HMAC_SECRET || '')
+    if (!signerUrl || !secret) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Gallery downloads are not configured (set R2_SIGNER_URL and GALLERY_DOWNLOAD_HMAC_SECRET on Functions)',
+      )
+    }
 
-    return { title }
+    const sanitizeFilename = (name) => {
+      const base =
+        (name && name.trim()) ||
+        objectKey
+          .split('/')
+          .filter(Boolean)
+          .pop() ||
+        'photo'
+      return (
+        String(base)
+          .split(/[/\\]/)
+          .pop()
+          .replace(/[^a-zA-Z0-9._\-\s()]+/g, '_')
+          .slice(0, 180) || 'photo'
+      )
+    }
+
+    const safeName = sanitizeFilename(filenameIn)
+    const exp = Date.now() + 5 * 60 * 1000
+    const sig = createHmac('sha256', secret)
+      .update(`${objectKey}\n${exp}\n${safeName}`)
+      .digest('base64url')
+
+    const q = new URLSearchParams({
+      objectKey,
+      exp: String(exp),
+      sig,
+      filename: safeName,
+    })
+    return { downloadUrl: `${signerUrl}/gallery-download?${q.toString()}` }
   },
 )

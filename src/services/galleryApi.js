@@ -124,6 +124,20 @@ export async function verifyGalleryKeyCallable(galleryId, key) {
   return result.data
 }
 
+/**
+ * Returns a short-lived URL on the R2 signer worker that streams the object with CORS
+ * (avoids browser fetch to public R2 without CORS).
+ */
+export async function issueGalleryDownloadTicket({ galleryId, objectKey, filename }) {
+  const fn = httpsCallable(functions, 'issueGalleryDownloadTicket')
+  const result = await fn({ galleryId, objectKey, filename })
+  const downloadUrl = result.data?.downloadUrl
+  if (typeof downloadUrl !== 'string' || !downloadUrl.trim()) {
+    throw new Error('No download URL returned')
+  }
+  return downloadUrl.trim()
+}
+
 export async function listGalleryPhotos(galleryId) {
   const q = query(
     collection(db, 'galleries', galleryId, 'photos'),

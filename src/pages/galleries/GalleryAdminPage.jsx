@@ -16,7 +16,12 @@ import {
   listOwnedGalleries,
 } from '../../services/galleryApi'
 import { deleteFromR2, getR2StorageUsage, uploadToR2WithPresign } from '../../services/r2UploadApi'
-import { defaultR2KeyForUpload, defaultThumbR2KeyForUpload, sanitizeObjectSegment } from './galleryUtils'
+import {
+  buildGalleryPhotoUploadBasename,
+  defaultR2KeyForUpload,
+  defaultThumbR2KeyForUpload,
+  sanitizeObjectSegment,
+} from './galleryUtils'
 
 async function userIsGalleryViewer(user) {
   if (!user) return false
@@ -267,25 +272,35 @@ function GalleryAdminPage() {
     const files = e.target.files
     if (!files?.length || !user || !selectedId) return
     const fileList = Array.from(files)
+    const uploadStartCount = photos.length
+    const galleryTitle = selected?.title || 'gallery'
+    const firstBasename = buildGalleryPhotoUploadBasename({
+      galleryTitle,
+      sequenceOneBased: uploadStartCount + 1,
+      file: fileList[0],
+    })
+    const firstLabel =
+      firstBasename.length > 40 ? `${firstBasename.slice(0, 37)}…` : firstBasename
     setBusy(true)
     setLoadError('')
     setUploadProgress({
       done: 0,
       total: fileList.length,
-      currentLabel: fileList[0]?.name
-        ? fileList[0].name.length > 40
-          ? `${fileList[0].name.slice(0, 37)}…`
-          : fileList[0].name
-        : '',
+      currentLabel: firstLabel,
     })
     try {
       for (let i = 0; i < fileList.length; i++) {
         const file = fileList[i]
+        const displayBasename = buildGalleryPhotoUploadBasename({
+          galleryTitle,
+          sequenceOneBased: uploadStartCount + i + 1,
+          file,
+        })
         const label =
-          file.name.length > 40 ? `${file.name.slice(0, 37)}…` : file.name
+          displayBasename.length > 40 ? `${displayBasename.slice(0, 37)}…` : displayBasename
         setUploadProgress({ done: i, total: fileList.length, currentLabel: label })
-        const expectedKey = defaultR2KeyForUpload(selectedId, file.name)
-        const thumbKey = defaultThumbR2KeyForUpload(selectedId, file.name)
+        const expectedKey = defaultR2KeyForUpload(selectedId, displayBasename)
+        const thumbKey = defaultThumbR2KeyForUpload(selectedId, displayBasename)
         const { objectKey: r2Key } = await uploadToR2WithPresign({
           galleryId: selectedId,
           file,
@@ -312,7 +327,7 @@ function GalleryAdminPage() {
           ownerUid: user.uid,
           r2Key,
           thumbR2Key: thumbR2Key || undefined,
-          filename: sanitizeObjectSegment(file.name),
+          filename: displayBasename,
         })
         setUploadProgress({
           done: i + 1,
