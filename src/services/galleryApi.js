@@ -68,6 +68,10 @@ export async function deletePhotoRecord(galleryId, photoDocId) {
   await deleteDoc(doc(db, 'galleries', galleryId, 'photos', photoDocId))
 }
 
+export async function deleteGalleryDocument(galleryId) {
+  await deleteDoc(doc(db, 'galleries', galleryId))
+}
+
 const GALLERY_TITLE_STORAGE_PREFIX = 'ffGalleryTitle:'
 
 export function setStoredGalleryTitle(galleryId, title) {

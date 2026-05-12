@@ -9,6 +9,7 @@ import { r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
   addPhotoRecord,
   createGallery,
+  deleteGalleryDocument,
   deletePhotoRecord,
   listGalleryPhotos,
   listOwnedGalleries,
@@ -39,12 +40,24 @@ function GalleryAdminPage() {
   const [copyStatus, setCopyStatus] = useState(false)
   const [storageTotalBytes, setStorageTotalBytes] = useState(0)
   const [storageByGallery, setStorageByGallery] = useState({})
+  const [deleteConfirmGallery, setDeleteConfirmGallery] = useState(null)
   const fileInputRef = useRef(null)
 
   const selected = useMemo(
     () => galleries.find((g) => g.id === selectedId) || null,
     [galleries, selectedId],
   )
+
+  useEffect(() => {
+    if (!deleteConfirmGallery) return
+    const onKey = (ev) => {
+      if (ev.key === 'Escape' && !busy) {
+        setDeleteConfirmGallery(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [deleteConfirmGallery, busy])
 
   // Scroll lock
   useEffect(() => {
@@ -330,6 +343,48 @@ function GalleryAdminPage() {
     }
   }
 
+  const onConfirmDeleteGallery = async () => {
+    const target = deleteConfirmGallery
+    if (!target || !user) return
+    const targetId = target.id
+    const wasSelected = selectedId === targetId
+    setBusy(true)
+    setLoadError('')
+    let r2DeleteWarning = ''
+    try {
+      const rows = await listGalleryPhotos(targetId)
+      for (const p of rows) {
+        if (p.r2Key) {
+          try {
+            await deleteFromR2(p.r2Key)
+          } catch (err) {
+            console.warn('R2 delete failed; removing Firestore record anyway', err)
+            r2DeleteWarning =
+              'One or more objects could not be removed from R2; Firestore metadata was still removed.  Be sure to visit https://dash.cloudflare.com/3fe7478227a6c725e93ebe2005240c23/r2/overview and make sure they are deleted.'
+          }
+        }
+        await deletePhotoRecord(targetId, p.id)
+      }
+      await deleteGalleryDocument(targetId)
+      setDeleteConfirmGallery(null)
+      const updated = await listOwnedGalleries(user.uid)
+      setGalleries(updated)
+      setSelectedId((prev) => {
+        if (prev !== targetId) return prev
+        return updated[0]?.id ?? null
+      })
+      if (wasSelected && !updated.length) {
+        setPhotos([])
+      }
+      await refreshStorageUsage()
+      if (r2DeleteWarning) setLoadError(r2DeleteWarning)
+    } catch (err) {
+      setLoadError(err?.message || 'Could not delete gallery')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onCopyShareLink = async () => {
     if (!selectedId) return
     const sharePath = `/galleries/${selectedId}`
@@ -376,21 +431,43 @@ function GalleryAdminPage() {
 
           <div className="mt-6 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {galleries.map((g) => (
-              <button
+              <div
                 key={g.id}
-                type="button"
-                onClick={() => setSelectedId(g.id)}
-                className={`flex w-full cursor-pointer flex-col rounded-lg border px-3 py-2 text-left text-sm transition ${
+                className={`flex w-full items-stretch gap-0.5 rounded-lg border text-sm transition ${
                   g.id === selectedId
                     ? 'border-white bg-zinc-900'
                     : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-600'
                 }`}
               >
-                <span className="font-medium">{g.title || 'Untitled'}</span>
-                <span className="mt-1 font-mono text-xs text-zinc-500">{g.id}</span>
-                <span className="mt-1 text-xs text-zinc-400">
-                {g.photoCount ? `${g.photoCount} photos` : 'No photos yet'} · {g.photoCount ? formatBytes(storageByGallery[g.id] || 0) : '0 B'}                </span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(g.id)}
+                  className="flex min-w-0 flex-1 flex-col px-3 py-2 text-left cursor-pointer"
+                >
+                  <span className="font-medium">{g.title || 'Untitled'}</span>
+                  <span className="mt-1 font-mono text-xs text-zinc-500">{g.id}</span>
+                  <span className="mt-1 text-xs text-zinc-400">
+                    {g.photoCount ? `${g.photoCount} photos` : 'No photos yet'} ·{' '}
+                    {g.photoCount ? formatBytes(storageByGallery[g.id] || 0) : '0 B'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 self-stretch px-2 text-zinc-500 transition hover:text-red-300 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={busy}
+                  aria-label={`Delete gallery ${g.title || 'Untitled'}`}
+                  title="Delete gallery"
+                  onClick={() =>
+                    setDeleteConfirmGallery({
+                      id: g.id,
+                      title: g.title || 'Untitled',
+                      photoCount: g.photoCount ?? 0,
+                    })
+                  }
+                >
+                  <Trash2 className="mx-auto h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
             ))}
             {galleries.length === 0 && (
               <p className="text-xs text-zinc-500">No galleries yet — create one below.</p>
@@ -595,6 +672,60 @@ function GalleryAdminPage() {
           )}
         </section>
       </div>
+
+      {deleteConfirmGallery ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-gallery-dialog-title"
+          onClick={() => !busy && setDeleteConfirmGallery(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-950 p-5 shadow-xl"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <h2 id="delete-gallery-dialog-title" className="text-lg font-semibold text-white">
+              Delete gallery?
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+              This permanently deletes{' '}
+              <span className="font-medium text-zinc-200">{deleteConfirmGallery.title}</span>
+              {deleteConfirmGallery.photoCount > 0 ? (
+                <>
+                  {' '}
+                  and{' '}
+                  <span className="text-zinc-300">
+                    {deleteConfirmGallery.photoCount} photo
+                    {deleteConfirmGallery.photoCount === 1 ? '' : 's'}
+                  </span>
+                  {' '}contained in this gallery
+                </>
+              ) : null}
+              .
+            </p>
+            <p className="mt-2 font-mono text-xs text-zinc-500">{deleteConfirmGallery.id}</p>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                className="cursor-pointer rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-900 disabled:opacity-50"
+                onClick={() => setDeleteConfirmGallery(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500 disabled:opacity-50"
+                onClick={onConfirmDeleteGallery}
+              >
+                {busy ? 'Deleting…' : 'Delete gallery'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }
