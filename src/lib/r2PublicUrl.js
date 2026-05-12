@@ -8,3 +8,12 @@ export function r2PublicUrl(objectKey) {
   const key = String(objectKey).replace(/^\/+/, '')
   return `${base.replace(/\/+$/, '')}/${key}`
 }
+
+/**
+ * URL for grid/list previews: stored `thumbR2Key` when present, else full `r2Key`.
+ * @param {{ r2Key?: string, thumbR2Key?: string }} photo
+ */
+export function r2PhotoPreviewUrl(photo) {
+  if (!photo) return ''
+  return r2PublicUrl(photo.thumbR2Key || photo.r2Key)
+}

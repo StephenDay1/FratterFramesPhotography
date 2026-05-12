@@ -5,7 +5,8 @@ import {
   ChevronDown, Copy, CopyCheck, SquareArrowOutUpRight, Trash2
 } from 'lucide-react'
 import { auth } from '../../lib/firebase'
-import { r2PublicUrl } from '../../lib/r2PublicUrl'
+import { generateJpegThumbnailBlob } from '../../lib/generateJpegThumbnail'
+import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
   addPhotoRecord,
   createGallery,
@@ -15,7 +16,7 @@ import {
   listOwnedGalleries,
 } from '../../services/galleryApi'
 import { deleteFromR2, getR2StorageUsage, uploadToR2WithPresign } from '../../services/r2UploadApi'
-import { defaultR2KeyForUpload, sanitizeObjectSegment } from './galleryUtils'
+import { defaultR2KeyForUpload, defaultThumbR2KeyForUpload, sanitizeObjectSegment } from './galleryUtils'
 
 async function userIsGalleryViewer(user) {
   if (!user) return false
@@ -41,6 +42,8 @@ function GalleryAdminPage() {
   const [storageTotalBytes, setStorageTotalBytes] = useState(0)
   const [storageByGallery, setStorageByGallery] = useState({})
   const [deleteConfirmGallery, setDeleteConfirmGallery] = useState(null)
+  /** Set only while a multi-file R2 upload is running; drives the progress bar. */
+  const [uploadProgress, setUploadProgress] = useState(null)
   const fileInputRef = useRef(null)
 
   const selected = useMemo(
@@ -263,21 +266,58 @@ function GalleryAdminPage() {
   const onRegisterFiles = async (e) => {
     const files = e.target.files
     if (!files?.length || !user || !selectedId) return
+    const fileList = Array.from(files)
     setBusy(true)
     setLoadError('')
+    setUploadProgress({
+      done: 0,
+      total: fileList.length,
+      currentLabel: fileList[0]?.name
+        ? fileList[0].name.length > 40
+          ? `${fileList[0].name.slice(0, 37)}…`
+          : fileList[0].name
+        : '',
+    })
     try {
-      for (const file of files) {
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i]
+        const label =
+          file.name.length > 40 ? `${file.name.slice(0, 37)}…` : file.name
+        setUploadProgress({ done: i, total: fileList.length, currentLabel: label })
         const expectedKey = defaultR2KeyForUpload(selectedId, file.name)
+        const thumbKey = defaultThumbR2KeyForUpload(selectedId, file.name)
         const { objectKey: r2Key } = await uploadToR2WithPresign({
           galleryId: selectedId,
           file,
           objectKey: expectedKey,
         })
+        let thumbR2Key = null
+        const thumbBlob = await generateJpegThumbnailBlob(file, { maxEdge: 960, quality: 0.82 })
+        if (thumbBlob && thumbBlob.size > 0) {
+          const thumbName = thumbKey.split('/').pop() || 'thumb.jpg'
+          const thumbFile = new File([thumbBlob], thumbName, { type: 'image/jpeg' })
+          try {
+            const { objectKey } = await uploadToR2WithPresign({
+              galleryId: selectedId,
+              file: thumbFile,
+              objectKey: thumbKey,
+            })
+            thumbR2Key = objectKey
+          } catch (thumbErr) {
+            console.warn('Thumbnail upload failed; saving full-size photo only', thumbErr)
+          }
+        }
         await addPhotoRecord({
           galleryId: selectedId,
           ownerUid: user.uid,
           r2Key,
+          thumbR2Key: thumbR2Key || undefined,
           filename: sanitizeObjectSegment(file.name),
+        })
+        setUploadProgress({
+          done: i + 1,
+          total: fileList.length,
+          currentLabel: label,
         })
       }
       await refreshPhotos()
@@ -285,6 +325,7 @@ function GalleryAdminPage() {
       setLoadError(err?.message || 'Could not register files')
     } finally {
       setBusy(false)
+      setUploadProgress(null)
       e.target.value = ''
     }
   }
@@ -324,6 +365,14 @@ function GalleryAdminPage() {
     setLoadError('')
     try {
       const photo = photos.find((p) => p.id === photoDocId)
+      if (!photo) return
+      if (photo.thumbR2Key) {
+        try {
+          await deleteFromR2(photo.thumbR2Key)
+        } catch (err) {
+          console.warn('R2 thumb delete failed', err)
+        }
+      }
       if (photo?.r2Key) {
         try {
           await deleteFromR2(photo.r2Key)
@@ -354,6 +403,15 @@ function GalleryAdminPage() {
     try {
       const rows = await listGalleryPhotos(targetId)
       for (const p of rows) {
+        if (p.thumbR2Key) {
+          try {
+            await deleteFromR2(p.thumbR2Key)
+          } catch (err) {
+            console.warn('R2 thumb delete failed; removing Firestore record anyway', err)
+            r2DeleteWarning =
+              'One or more objects could not be removed from R2; Firestore metadata was still removed.  Be sure to visit https://dash.cloudflare.com/3fe7478227a6c725e93ebe2005240c23/r2/overview and make sure they are deleted.'
+          }
+        }
         if (p.r2Key) {
           try {
             await deleteFromR2(p.r2Key)
@@ -546,14 +604,47 @@ function GalleryAdminPage() {
                     className="sr-only"
                     onChange={onRegisterFiles}
                   />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={busy}
-                    className="mt-4 inline-flex cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {busy ? 'Uploading…' : 'Choose files…'}
-                  </button>
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={busy}
+                      className="inline-flex cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {busy && uploadProgress
+                        ? `Uploading ${uploadProgress.done}/${uploadProgress.total}…`
+                        : busy
+                          ? 'Uploading…'
+                          : 'Choose files…'}
+                    </button>
+                    {uploadProgress && uploadProgress.total > 0 ? (
+                      <div className="mt-3 max-w-xs">
+                        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-zinc-500">
+                          <span className="min-w-0 truncate" title={uploadProgress.currentLabel}>
+                            {uploadProgress.currentLabel || ' '}
+                          </span>
+                          <span className="shrink-0 font-mono tabular-nums">
+                            {uploadProgress.done}/{uploadProgress.total}
+                          </span>
+                        </div>
+                        <div
+                          className="h-2 overflow-hidden rounded-full bg-zinc-800"
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={uploadProgress.total}
+                          aria-valuenow={uploadProgress.done}
+                          aria-label={`Upload progress ${uploadProgress.done} of ${uploadProgress.total}`}
+                        >
+                          <div
+                            className="h-full rounded-full bg-zinc-300 transition-[width] duration-200 ease-out"
+                            style={{
+                              width: `${uploadProgress.total ? (100 * uploadProgress.done) / uploadProgress.total : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
 
                   <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-950/40">
                     <button
@@ -627,15 +718,21 @@ function GalleryAdminPage() {
                   </h3>
                   <ul className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 lg:max-h-none">
                     {photos.map((p) => {
-                      const url = r2PublicUrl(p.r2Key)
+                      const fullUrl = r2PublicUrl(p.r2Key)
+                      const thumbUrl = r2PhotoPreviewUrl(p) || fullUrl
                       return (
                         <li
                           key={p.id}
                           className="flex gap-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2"
                         >
                           <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md bg-zinc-900">
-                            {url ? (
-                              <img src={url} alt="" className="h-full w-full object-cover" loading="lazy" />
+                            {thumbUrl ? (
+                              <img
+                                src={thumbUrl}
+                                alt=""
+                                className="h-full w-full object-cover"
+                                loading="lazy"
+                              />
                             ) : (
                               <div className="flex h-full items-center justify-center text-[10px] text-zinc-600">
                                 —

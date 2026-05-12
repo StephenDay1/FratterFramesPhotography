@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { r2PublicUrl } from '../../lib/r2PublicUrl'
+import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import { getGalleryTitleForView, listGalleryPhotos } from '../../services/galleryApi'
 import RequireGalleryAccess from './RequireGalleryAccess'
 
@@ -76,12 +76,13 @@ function GalleryViewPage() {
           <ul className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {photos.map((p) => {
               const href = r2PublicUrl(p.r2Key)
+              const gridSrc = r2PhotoPreviewUrl(p) || href
               return (
                 <li key={p.id} className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40">
                   {href ? (
                     <a href={href} target="_blank" rel="noreferrer" className="block">
                       <img
-                        src={href}
+                        src={gridSrc}
                         alt={p.filename || 'Photo'}
                         className="aspect-square w-full object-cover"
                         loading="lazy"

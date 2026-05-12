@@ -54,14 +54,16 @@ export async function createGallery({
   return galleryId
 }
 
-export async function addPhotoRecord({ galleryId, ownerUid, r2Key, filename }) {
+export async function addPhotoRecord({ galleryId, ownerUid, r2Key, thumbR2Key, filename }) {
   const photos = collection(db, 'galleries', galleryId, 'photos')
-  await addDoc(photos, {
+  const row = {
     ownerUid,
     r2Key,
     filename: filename || r2Key.split('/').pop() || 'photo',
     createdAt: serverTimestamp(),
-  })
+  }
+  if (thumbR2Key) row.thumbR2Key = thumbR2Key
+  await addDoc(photos, row)
 }
 
 export async function deletePhotoRecord(galleryId, photoDocId) {
