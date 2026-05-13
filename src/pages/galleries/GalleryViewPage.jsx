@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import { getGalleryTitleForView, issueGalleryDownloadTicket, listGalleryPhotos } from '../../services/galleryApi'
 import RequireGalleryAccess from './RequireGalleryAccess'
+import { ChevronLeft, ChevronRight, Download } from 'lucide-react'
 
 const LS_DOWNLOADED_PHOTO_IDS = 'ffGalleryDownloadedIds:'
 
@@ -213,7 +214,7 @@ function GalleryViewPage() {
           )}
 
           {!loading && !error && photos.length > 0 && (
-            <div className="columns-1 gap-3 sm:columns-2 lg:columns-3">
+            <div className="columns-2 gap-3 sm:columns-4 lg:columns-6">
               {photos.map((p, index) => {
                 const href = r2PublicUrl(p.r2Key)
                 const gridSrc = r2PhotoPreviewUrl(p) || href
@@ -281,16 +282,18 @@ function GalleryViewPage() {
             >
               {showDownloadedOnly ? (
                 <>
-                  <svg className="h-4 w-4 shrink-0 text-emerald-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
+                  {/* <svg className="h-4 w-4 shrink-0 text-emerald-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
+                  </svg> */}
+                  <Download className="h-4 w-4 shrink-0 text-emerald-300" />
                   Downloaded
                 </>
               ) : (
                 <>
-                  <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  {/* <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
+                  </svg> */}
+                  <Download className="h-4 w-4 shrink-0" />
                   {downloadBusy ? 'Downloading…' : activeDownloaded ? 'Download again' : 'Download'}
                 </>
               )}
@@ -313,9 +316,10 @@ function GalleryViewPage() {
                   aria-label="Previous photo"
                   className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition hover:bg-white/20 md:h-12 md:w-12"
                 >
-                  <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  {/* <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                  </svg>
+                  </svg> */}
+                  <ChevronLeft className="h-6 w-6" />
                 </button>
                 <img
                   src={activeSrc}
@@ -328,9 +332,10 @@ function GalleryViewPage() {
                   aria-label="Next photo"
                   className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition hover:bg-white/20 md:h-12 md:w-12"
                 >
-                  <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  {/* <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
+                  </svg> */}
+                  <ChevronRight className="h-6 w-6" />
                 </button>
               </div>
               {active.filename && (

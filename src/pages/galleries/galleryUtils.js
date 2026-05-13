@@ -4,11 +4,11 @@ export function sanitizeObjectSegment(name) {
   return cleaned.slice(0, 180) || 'file'
 }
 
-/** URL-safe fragment from gallery title for filenames (hyphens between words). */
+/** URL-safe fragment from gallery title for filenames. */
 export function sanitizeGallerySlug(title) {
   const raw = String(title || '').trim() || 'gallery'
   const collapsed = raw
-    .replace(/\s+/g, '-')
+    .replace(/\s+/g, '')
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
