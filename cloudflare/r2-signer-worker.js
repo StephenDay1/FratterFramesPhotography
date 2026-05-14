@@ -3,7 +3,8 @@
  * and proxies admin deletes back to R2.
  *
  * Required vars (wrangler.toml):
- *   ALLOWED_ADMIN_UIDS   comma-separated Firebase Auth UIDs allowed to upload/delete
+ *   ALLOWED_ADMIN_UIDS   comma-separated Firebase Auth UIDs allowed to upload/delete (optional if
+ *                        users have custom claim admin: true, verified via customAttributes)
  *   ALLOWED_ORIGINS      comma-separated browser origins allowed to call this Worker
  *   R2_ACCOUNT_ID        Cloudflare account id (the prefix of *.r2.cloudflarestorage.com)
  *   R2_BUCKET_NAME       R2 bucket to upload into
@@ -78,6 +79,17 @@ async function verifyFirebaseIdToken(idToken, firebaseApiKey) {
   return data?.users?.[0] || null
 }
 
+function userRecordHasAdminClaim(user) {
+  const raw = user?.customAttributes
+  if (!raw || typeof raw !== 'string') return false
+  try {
+    const attrs = JSON.parse(raw)
+    return attrs?.admin === true
+  } catch {
+    return false
+  }
+}
+
 async function authenticate(request, env) {
   const auth = request.headers.get('authorization') || ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
@@ -87,10 +99,10 @@ async function authenticate(request, env) {
   if (!user?.localId) return { error: 'Invalid Firebase token', status: 401 }
 
   const allowedUids = parseList(env.ALLOWED_ADMIN_UIDS)
-  if (!allowedUids.includes(user.localId)) {
-    return { error: 'Not authorized', status: 403 }
+  if (allowedUids.includes(user.localId) || userRecordHasAdminClaim(user)) {
+    return { user }
   }
-  return { user }
+  return { error: 'Not authorized', status: 403 }
 }
 
 function buildR2Client(env) {

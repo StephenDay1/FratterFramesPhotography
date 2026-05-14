@@ -13,7 +13,7 @@ import {
   deleteGalleryDocument,
   deletePhotoRecord,
   listGalleryPhotos,
-  listOwnedGalleries,
+  listGalleries,
 } from '../../services/galleryApi'
 import { deleteFromR2, getR2StorageUsage, uploadToR2WithPresign } from '../../services/r2UploadApi'
 import {
@@ -112,7 +112,7 @@ function GalleryAdminPage() {
     ;(async () => {
       setLoadError('')
       try {
-        const rows = await listOwnedGalleries(user.uid)
+        const rows = await listGalleries()
         if (!cancelled) {
           setGalleries(rows)
           setSelectedId((prev) => {
@@ -219,7 +219,7 @@ function GalleryAdminPage() {
 
   const refreshGalleries = async () => {
     if (!user) return
-    const rows = await listOwnedGalleries(user.uid)
+    const rows = await listGalleries()
     setGalleries(rows)
     await refreshStorageUsage()
   }
@@ -440,7 +440,7 @@ function GalleryAdminPage() {
       }
       await deleteGalleryDocument(targetId)
       setDeleteConfirmGallery(null)
-      const updated = await listOwnedGalleries(user.uid)
+      const updated = await listGalleries()
       setGalleries(updated)
       setSelectedId((prev) => {
         if (prev !== targetId) return prev

@@ -9,7 +9,6 @@ import {
   query,
   serverTimestamp,
   setDoc,
-  where,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { db, functions } from '../lib/firebase'
@@ -22,9 +21,12 @@ function sortByCreatedAtDesc(docs) {
   })
 }
 
-export async function listOwnedGalleries(ownerUid) {
-  const q = query(collection(db, 'galleries'), where('ownerUid', '==', ownerUid))
-  const snap = await getDocs(q)
+/**
+ * Lists galleries visible to the signed-in user (owner galleries, or every gallery if the
+ * account has custom claim admin: true — see Firestore rules).
+ */
+export async function listGalleries() {
+  const snap = await getDocs(collection(db, 'galleries'))
   const rows = await Promise.all(
     snap.docs.map(async (d) => {
       const photosSnap = await getDocs(collection(db, 'galleries', d.id, 'photos'))

@@ -5,8 +5,8 @@ import { doc, getDoc } from 'firebase/firestore'
 import { auth, db } from '../../lib/firebase'
 
 /**
- * Allows access when the user is the gallery owner, or holds a custom-token claim
- * galleryId matching this route param (set by verifyGalleryKey callable).
+ * Allows access for the matching gallery viewer token, the gallery owner, or a user with
+ * custom claim admin: true (set via Admin SDK).
  */
 function RequireGalleryAccess({ galleryId, children }) {
   const [status, setStatus] = useState('loading')
@@ -24,6 +24,11 @@ function RequireGalleryAccess({ galleryId, children }) {
         const id = await user.getIdTokenResult(true)
         const claims = id.claims || {}
         if (claims.galleryId === galleryId) {
+          if (!cancelled) setStatus('ok')
+          return
+        }
+
+        if (claims.admin === true) {
           if (!cancelled) setStatus('ok')
           return
         }

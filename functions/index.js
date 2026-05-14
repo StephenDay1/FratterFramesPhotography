@@ -38,6 +38,10 @@ if (!admin.apps.length) {
   })
 }
 
+function tokenIsGalleryAdmin(token) {
+  return token?.admin === true
+}
+
 /** App Engine default SA for Cloud Run runtime (Gen 2 pin). */
 const appspotServiceAccount = projectId ? `${projectId}@appspot.gserviceaccount.com` : ''
 
@@ -136,8 +140,9 @@ exports.getGalleryPublicInfo = onCall(
       typeof token.galleryId === 'string' &&
       token.galleryId === galleryId
     const isOwner = data.ownerUid === request.auth.uid
+    const isAdminUser = tokenIsGalleryAdmin(token)
 
-    if (!isViewer && !isOwner) {
+    if (!isViewer && !isOwner && !isAdminUser) {
       throw new HttpsError('permission-denied', 'Not allowed')
     }
 
@@ -193,8 +198,9 @@ exports.issueGalleryDownloadTicket = onCall(
       typeof token.galleryId === 'string' &&
       token.galleryId === galleryId
     const isOwner = data.ownerUid === request.auth.uid
+    const isAdminUser = tokenIsGalleryAdmin(token)
 
-    if (!isViewer && !isOwner) {
+    if (!isViewer && !isOwner && !isAdminUser) {
       throw new HttpsError('permission-denied', 'Not allowed')
     }
 

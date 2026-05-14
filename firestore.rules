@@ -1,33 +1,42 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Gallery root: only the owner (your Firebase Auth account) can read/write metadata.
+
+    /** Set via Admin SDK: auth.setCustomUserClaims(uid, { admin: true }) */
+    function isGalleryAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+
     match /galleries/{galleryId} {
       allow read: if request.auth != null
-        && resource.data.ownerUid == request.auth.uid;
+        && (resource.data.ownerUid == request.auth.uid || isGalleryAdmin());
       allow create: if request.auth != null
         && request.resource.data.ownerUid == request.auth.uid;
-      allow update, delete: if request.auth != null
-        && resource.data.ownerUid == request.auth.uid;
+      allow update: if request.auth != null
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && (resource.data.ownerUid == request.auth.uid || isGalleryAdmin());
+      allow delete: if request.auth != null
+        && (resource.data.ownerUid == request.auth.uid || isGalleryAdmin());
 
-      // Photos: owner manages; viewers authenticate via custom token from verifyGalleryKey.
       match /photos/{photoId} {
-        // Per-document read: allowed for the matching gallery viewer or the owner.
         allow get: if request.auth != null && (
           request.auth.token.galleryId == galleryId
           || resource.data.ownerUid == request.auth.uid
+          || isGalleryAdmin()
         );
-        // List/query: rule must be satisfiable from the query alone, not per-doc.
-        // Either the caller is the gallery's matching viewer, or they own the parent gallery.
         allow list: if request.auth != null && (
           request.auth.token.galleryId == galleryId
           || get(/databases/$(database)/documents/galleries/$(galleryId)).data.ownerUid == request.auth.uid
+          || isGalleryAdmin()
         );
         allow create: if request.auth != null
-          && get(/databases/$(database)/documents/galleries/$(galleryId)).data.ownerUid == request.auth.uid
-          && request.resource.data.ownerUid == request.auth.uid;
+          && request.resource.data.ownerUid == request.auth.uid
+          && (
+            get(/databases/$(database)/documents/galleries/$(galleryId)).data.ownerUid == request.auth.uid
+            || isGalleryAdmin()
+          );
         allow update, delete: if request.auth != null
-          && resource.data.ownerUid == request.auth.uid;
+          && (resource.data.ownerUid == request.auth.uid || isGalleryAdmin());
       }
     }
   }
