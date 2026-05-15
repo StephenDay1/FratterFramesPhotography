@@ -1,5 +1,6 @@
 const { randomUUID, createHmac } = require('crypto')
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
+const { onDocumentCreated } = require('firebase-functions/v2/firestore')
 const { logger } = require('firebase-functions')
 const admin = require('firebase-admin')
 
@@ -37,6 +38,8 @@ if (!admin.apps.length) {
     ...(firebaseAdminSignerEmail ? { serviceAccountId: firebaseAdminSignerEmail } : {}),
   })
 }
+
+const { runGalleryZipJob, isR2ZipExportConfigured } = require('./galleryZipJob')
 
 function tokenIsGalleryAdmin(token) {
   return token?.admin === true
@@ -243,5 +246,137 @@ exports.issueGalleryDownloadTicket = onCall(
       filename: safeName,
     })
     return { downloadUrl: `${signerUrl}/gallery-download?${q.toString()}` }
+  },
+)
+
+/** Bound to Cloud Functions secrets so `firebase functions:secrets:set` values appear on `process.env`. */
+const R2_ZIP_EXPORT_SECRETS = [
+  'R2_ACCOUNT_ID',
+  'R2_BUCKET_NAME',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+]
+
+/**
+ * Queues a server-side zip of all originals in the gallery. A Firestore trigger streams objects
+ * from R2 into a multipart zip upload (see onGalleryZipJobQueued). Client listens to the job doc
+ * for status, then uses issueGalleryDownloadTicket on zipR2Key.
+ */
+exports.startGalleryZipExport = onCall(
+  {
+    region: 'us-central1',
+    ...(appspotServiceAccount ? { serviceAccount: appspotServiceAccount } : {}),
+    invoker: 'public',
+    cors: true,
+    ingressSettings: 'ALLOW_ALL',
+    secrets: R2_ZIP_EXPORT_SECRETS,
+  },
+  async (request) => {
+    const galleryId =
+      typeof request.data?.galleryId === 'string' ? request.data.galleryId.trim() : ''
+
+    if (!galleryId) {
+      throw new HttpsError('invalid-argument', 'galleryId is required')
+    }
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'Sign in required')
+    }
+
+    const ref = admin.firestore().doc(`galleries/${galleryId}`)
+    const snap = await ref.get()
+    if (!snap.exists) {
+      throw new HttpsError('not-found', 'Gallery not found')
+    }
+
+    const data = snap.data()
+    const token = request.auth.token || {}
+    const isViewer =
+      token.galleryViewer === true &&
+      typeof token.galleryId === 'string' &&
+      token.galleryId === galleryId
+    const isOwner = data.ownerUid === request.auth.uid
+    const isAdminUser = tokenIsGalleryAdmin(token)
+
+    if (!isViewer && !isOwner && !isAdminUser) {
+      throw new HttpsError('permission-denied', 'Not allowed')
+    }
+
+    if (!isR2ZipExportConfigured()) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Zip export is not configured on Functions. Set R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY (same R2 API token as the Worker uses).',
+      )
+    }
+
+    const jobId = randomUUID()
+    await admin.firestore().doc(`galleries/${galleryId}/zipJobs/${jobId}`).set({
+      status: 'queued',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    })
+
+    return { jobId }
+  },
+)
+
+exports.onGalleryZipJobQueued = onDocumentCreated(
+  {
+    document: 'galleries/{galleryId}/zipJobs/{jobId}',
+    region: 'us-central1',
+    // Firestore triggers are capped at 540s (see Firebase Functions quotas).
+    timeoutSeconds: 540,
+    memory: '2GiB',
+    ...(appspotServiceAccount ? { serviceAccount: appspotServiceAccount } : {}),
+    secrets: R2_ZIP_EXPORT_SECRETS,
+  },
+  async (event) => {
+    const { galleryId, jobId } = event.params
+    const snap = event.data
+    if (!snap?.exists) return
+    const initial = snap.data()
+    if (initial?.status !== 'queued') return
+
+    const db = admin.firestore()
+    const jobRef = db.doc(`galleries/${galleryId}/zipJobs/${jobId}`)
+
+    let claimed = false
+    try {
+      await db.runTransaction(async (t) => {
+        const doc = await t.get(jobRef)
+        const d = doc.data()
+        if (!d || d.status !== 'queued') return
+        claimed = true
+        t.update(jobRef, {
+          status: 'processing',
+          startedAt: admin.firestore.FieldValue.serverTimestamp(),
+        })
+      })
+    } catch (err) {
+      logger.error('zip job claim transaction failed', { galleryId, jobId, err })
+      return
+    }
+
+    if (!claimed) return
+
+    try {
+      const { zipR2Key, photoCount } = await runGalleryZipJob(galleryId, jobId)
+      await jobRef.update({
+        status: 'ready',
+        zipR2Key,
+        photoCount,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+    } catch (err) {
+      logger.error('gallery zip job failed', { galleryId, jobId, err })
+      const msg = err?.message ? String(err.message).slice(0, 900) : 'Zip failed'
+      try {
+        await jobRef.update({
+          status: 'failed',
+          error: msg,
+          failedAt: admin.firestore.FieldValue.serverTimestamp(),
+        })
+      } catch (e2) {
+        logger.error('could not persist zip failure', e2)
+      }
+    }
   },
 )

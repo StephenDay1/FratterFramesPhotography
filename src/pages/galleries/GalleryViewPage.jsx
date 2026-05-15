@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
-import { getGalleryTitleForView, issueGalleryDownloadTicket, listGalleryPhotos } from '../../services/galleryApi'
+import {
+  getGalleryTitleForView,
+  issueGalleryDownloadTicket,
+  listGalleryPhotos,
+  startGalleryZipExport,
+  subscribeGalleryZipJob,
+} from '../../services/galleryApi'
 import RequireGalleryAccess from './RequireGalleryAccess'
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react'
 
@@ -41,6 +47,28 @@ function GalleryViewPage() {
   const [downloadedPhotoIds, setDownloadedPhotoIds] = useState(() => loadDownloadedPhotoIds(galleryId))
   const [downloadBtnPointerOver, setDownloadBtnPointerOver] = useState(false)
   const [downloadBtnFocused, setDownloadBtnFocused] = useState(false)
+  const [zipAllBusy, setZipAllBusy] = useState(false)
+  const [zipAllMessage, setZipAllMessage] = useState('')
+  const [zipAllError, setZipAllError] = useState('')
+
+  const galleryTitleRef = useRef(galleryTitle)
+  const zipJobUnsubRef = useRef(() => {})
+  const zipSessionRef = useRef(0)
+
+  useEffect(() => {
+    galleryTitleRef.current = galleryTitle
+  }, [galleryTitle])
+
+  useEffect(() => {
+    zipSessionRef.current += 1
+    zipJobUnsubRef.current()
+    zipJobUnsubRef.current = () => {}
+    queueMicrotask(() => {
+      setZipAllBusy(false)
+      setZipAllMessage('')
+      setZipAllError('')
+    })
+  }, [galleryId])
 
   const closeLightbox = useCallback(() => {
     setLightboxIndex(null)
@@ -60,7 +88,9 @@ function GalleryViewPage() {
 
   useEffect(() => {
     let cancelled = false
-    setGalleryTitle(null)
+    queueMicrotask(() => {
+      if (!cancelled) setGalleryTitle(null)
+    })
     ;(async () => {
       setLoading(true)
       setError('')
@@ -84,22 +114,30 @@ function GalleryViewPage() {
   }, [galleryId])
 
   useEffect(() => {
-    setDownloadedPhotoIds(loadDownloadedPhotoIds(galleryId))
+    queueMicrotask(() => {
+      setDownloadedPhotoIds(loadDownloadedPhotoIds(galleryId))
+    })
   }, [galleryId])
 
   useEffect(() => {
-    setLightboxIndex(null)
+    queueMicrotask(() => {
+      setLightboxIndex(null)
+    })
   }, [galleryId])
 
   useEffect(() => {
-    setDownloadBusy(false)
-    setDownloadBtnPointerOver(false)
-    setDownloadBtnFocused(false)
+    queueMicrotask(() => {
+      setDownloadBusy(false)
+      setDownloadBtnPointerOver(false)
+      setDownloadBtnFocused(false)
+    })
   }, [lightboxIndex])
 
   useEffect(() => {
     if (lightboxIndex !== null && lightboxIndex >= photos.length) {
-      setLightboxIndex(null)
+      queueMicrotask(() => {
+        setLightboxIndex(null)
+      })
     }
   }, [photos.length, lightboxIndex])
 
@@ -177,12 +215,119 @@ function GalleryViewPage() {
     }
   }, [active, galleryId])
 
+  const downloadZipBlob = useCallback(
+    async (zipR2Key, zipFilename) => {
+      const downloadUrl = await issueGalleryDownloadTicket({
+        galleryId,
+        objectKey: zipR2Key,
+        filename: zipFilename,
+      })
+      const res = await fetch(downloadUrl)
+      if (!res.ok) throw new Error(`Download failed (${res.status})`)
+      const blob = await res.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      try {
+        const a = document.createElement('a')
+        a.href = objectUrl
+        a.download = zipFilename
+        a.rel = 'noopener'
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+      } finally {
+        URL.revokeObjectURL(objectUrl)
+      }
+    },
+    [galleryId],
+  )
+
+  const startZipAllDownload = useCallback(async () => {
+    if (!galleryId || zipAllBusy || photos.length === 0) return
+    const session = zipSessionRef.current
+    setZipAllBusy(true)
+    setZipAllError('')
+    setZipAllMessage('Starting…')
+    zipJobUnsubRef.current()
+    zipJobUnsubRef.current = () => {}
+
+    try {
+      const jobId = await startGalleryZipExport(galleryId)
+      if (session !== zipSessionRef.current) {
+        setZipAllBusy(false)
+        setZipAllMessage('')
+        return
+      }
+      setZipAllMessage('Building zip on server…')
+
+      const unsub = subscribeGalleryZipJob(
+        galleryId,
+        jobId,
+        (data) => {
+          if (session !== zipSessionRef.current) return
+          if (!data) return
+          if (data.status === 'failed') {
+            zipJobUnsubRef.current()
+            zipJobUnsubRef.current = () => {}
+            setZipAllError(typeof data.error === 'string' ? data.error : 'Zip failed')
+            setZipAllBusy(false)
+            setZipAllMessage('')
+            return
+          }
+          if (data.status === 'processing') {
+            setZipAllMessage('Zipping originals (large galleries may take several minutes)…')
+            return
+          }
+          if (data.status === 'ready' && typeof data.zipR2Key === 'string' && data.zipR2Key) {
+            zipJobUnsubRef.current()
+            zipJobUnsubRef.current = () => {}
+            const titleBase = (galleryTitleRef.current && galleryTitleRef.current.trim()) || 'gallery'
+            const zipFilename = `${titleBase.replace(/[/\\?%*:|"<>]/g, '-').slice(0, 80) || 'gallery'}.zip`
+            setZipAllMessage('Preparing download…')
+            void (async () => {
+              try {
+                if (session !== zipSessionRef.current) return
+                await downloadZipBlob(data.zipR2Key, zipFilename)
+                if (session !== zipSessionRef.current) return
+                setZipAllMessage('')
+              } catch (e) {
+                if (session !== zipSessionRef.current) return
+                const fallback = r2PublicUrl(data.zipR2Key)
+                if (fallback) window.open(fallback, '_blank', 'noopener,noreferrer')
+                setZipAllError(e?.message || 'Download failed')
+              } finally {
+                if (session === zipSessionRef.current) {
+                  setZipAllBusy(false)
+                  setZipAllMessage('')
+                }
+              }
+            })()
+          }
+        },
+        () => {
+          if (session !== zipSessionRef.current) return
+          zipJobUnsubRef.current()
+          zipJobUnsubRef.current = () => {}
+          setZipAllError('Could not read zip job status')
+          setZipAllBusy(false)
+          setZipAllMessage('')
+        },
+      )
+      zipJobUnsubRef.current = unsub
+    } catch (e) {
+      if (session === zipSessionRef.current) {
+        setZipAllError(e?.message || 'Could not start zip export')
+        setZipAllBusy(false)
+        setZipAllMessage('')
+      }
+    }
+  }, [galleryId, photos.length, zipAllBusy, downloadZipBlob])
+
   return (
     <RequireGalleryAccess galleryId={galleryId}>
       <main className="min-h-screen bg-black text-white">
         <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10">
           <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-            <div>
+            <div className="min-w-0 flex-1">
               <Link
                 to="/galleries"
                 className="text-sm font-medium tracking-wide text-zinc-300 transition hover:text-white"
@@ -193,6 +338,23 @@ function GalleryViewPage() {
                 {galleryTitle ?? 'Your Gallery'}
               </h1>
             </div>
+            {!loading && !error && photos.length > 0 && (
+              <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:items-end">
+                <button
+                  type="button"
+                  onClick={startZipAllDownload}
+                  disabled={zipAllBusy}
+                  aria-busy={zipAllBusy}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white cursor-pointer transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
+                >
+                  <Download className="h-4 w-4 shrink-0" aria-hidden />
+                  {zipAllBusy ? zipAllMessage || 'Working…' : 'Download all'}
+                </button>
+                {zipAllError && (
+                  <p className="max-w-md text-xs text-red-300 sm:text-right">{zipAllError}</p>
+                )}
+              </div>
+            )}
           </div>
 
           {loading && <p className="text-sm text-zinc-400">Loading gallery…</p>}

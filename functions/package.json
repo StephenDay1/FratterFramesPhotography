@@ -10,6 +10,9 @@
     "deploy": "firebase deploy --only functions"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1047.0",
+    "@aws-sdk/lib-storage": "^3.1047.0",
+    "archiver": "^7.0.1",
     "firebase-admin": "^12.7.0",
     "firebase-functions": "^5.1.1"
   }

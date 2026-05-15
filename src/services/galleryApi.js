@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   orderBy,
   query,
   serverTimestamp,
@@ -138,6 +139,39 @@ export async function issueGalleryDownloadTicket({ galleryId, objectKey, filenam
     throw new Error('No download URL returned')
   }
   return downloadUrl.trim()
+}
+
+/**
+ * Queues a backend zip of all originals (see Functions: startGalleryZipExport + onGalleryZipJobQueued).
+ * Returns jobId; subscribe with subscribeGalleryZipJob.
+ */
+export async function startGalleryZipExport(galleryId) {
+  const fn = httpsCallable(functions, 'startGalleryZipExport')
+  const result = await fn({ galleryId })
+  const jobId = result.data?.jobId
+  if (typeof jobId !== 'string' || !jobId.trim()) {
+    throw new Error('No zip job id returned')
+  }
+  return jobId.trim()
+}
+
+/**
+ * @param {(data: Record<string, unknown> | undefined) => void} onData
+ * @param {(err: Error) => void} [onError]
+ * @returns {() => void} unsubscribe
+ */
+export function subscribeGalleryZipJob(galleryId, jobId, onData, onError) {
+  const ref = doc(db, 'galleries', galleryId, 'zipJobs', jobId)
+  return onSnapshot(
+    ref,
+    (snap) => {
+      onData(snap.exists() ? snap.data() : undefined)
+    },
+    (err) => {
+      if (onError) onError(err)
+      else console.error('zip job snapshot error', err)
+    },
+  )
 }
 
 export async function listGalleryPhotos(galleryId) {

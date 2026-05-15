@@ -38,6 +38,16 @@ service cloud.firestore {
         allow update, delete: if request.auth != null
           && (resource.data.ownerUid == request.auth.uid || isGalleryAdmin());
       }
+
+      /** Zip export jobs: created/updated only by Cloud Functions (Admin SDK). Clients may read status. */
+      match /zipJobs/{jobId} {
+        allow read: if request.auth != null && (
+          request.auth.token.galleryId == galleryId
+          || get(/databases/$(database)/documents/galleries/$(galleryId)).data.ownerUid == request.auth.uid
+          || isGalleryAdmin()
+        );
+        allow create, update, delete: if false;
+      }
     }
   }
 }
