@@ -1,5 +1,12 @@
+const { createHash } = require('crypto')
 const archiver = require('archiver')
-const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3')
+const {
+  S3Client,
+  GetObjectCommand,
+  HeadObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+} = require('@aws-sdk/client-s3')
 const { Upload } = require('@aws-sdk/lib-storage')
 const { PassThrough } = require('node:stream')
 const { finished } = require('node:stream/promises')
@@ -47,6 +54,114 @@ function entryNameForPhoto(photo, index) {
     .slice(0, 24)
   const n = String(index + 1).padStart(4, '0')
   return `${n}_${idPart}_${safe}`
+}
+
+/** @returns {{ galleryId: string, kind: 'photos' | 'export' } | null} */
+function classifyGalleryObjectKey(key) {
+  const match = String(key || '').match(/^galleries\/([^/]+)\/(.+)$/)
+  if (!match) return null
+  const galleryId = match[1]
+  const rest = match[2]
+  if (rest.startsWith('exports/')) return { galleryId, kind: 'export' }
+  return { galleryId, kind: 'photos' }
+}
+
+/** Stable R2 key for the gallery's cached "download all" zip. */
+function galleryZipExportKey(galleryId) {
+  return `galleries/${galleryId}/exports/gallery.zip`
+}
+
+/** Changes when photos are added, removed, or their r2Key changes. */
+function computeGalleryZipFingerprint(photos) {
+  const lines = photos
+    .map((p) => `${p.id}\t${p.r2Key}`)
+    .sort()
+    .join('\n')
+  return createHash('sha256').update(lines).digest('hex')
+}
+
+async function r2ObjectExists(s3, bucket, key) {
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+    return true
+  } catch (err) {
+    if (err?.name === 'NotFound' || err?.$metadata?.httpStatusCode === 404) return false
+    throw err
+  }
+}
+
+async function deleteR2ObjectIfExists(s3, bucket, key) {
+  if (!key) return
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+  } catch (err) {
+    logger.warn('galleryZipJob delete object failed', { key, err: String(err) })
+  }
+}
+
+/**
+ * If a cached zip matches the current photos and still exists in R2, returns reuse info.
+ * Otherwise deletes any stale cached zip and signals that a new build should be queued.
+ */
+async function resolveGalleryZipExport(db, galleryId, galleryData) {
+  const env = getR2Env()
+  if (!env) {
+    throw new Error(
+      'R2 is not configured on Functions (set R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)',
+    )
+  }
+
+  const photos = await loadPhotosForGallery(db, galleryId)
+  if (!photos.length) {
+    throw new Error('No photos with a valid r2Key found for this gallery')
+  }
+
+  const fingerprint = computeGalleryZipFingerprint(photos)
+  const cachedKey =
+    typeof galleryData?.zipExportR2Key === 'string' ? galleryData.zipExportR2Key.trim() : ''
+  const cachedFingerprint =
+    typeof galleryData?.zipExportFingerprint === 'string' ? galleryData.zipExportFingerprint : ''
+
+  const s3 = createR2S3Client(env)
+  const bucket = env.bucket
+  const expectedKey = galleryZipExportKey(galleryId)
+
+  if (cachedFingerprint === fingerprint && cachedKey) {
+    const keyToUse = cachedKey === expectedKey ? cachedKey : expectedKey
+    if (await r2ObjectExists(s3, bucket, keyToUse)) {
+      logger.info('galleryZipJob cache hit', { galleryId, zipKey: keyToUse, photoCount: photos.length })
+      return {
+        action: 'reuse',
+        zipR2Key: keyToUse,
+        photoCount: photos.length,
+        fingerprint,
+      }
+    }
+    logger.info('galleryZipJob cache miss (object missing in R2)', { galleryId, cachedKey: keyToUse })
+  } else if (cachedFingerprint !== fingerprint && cachedKey) {
+    logger.info('galleryZipJob cache stale (gallery changed)', {
+      galleryId,
+      cachedFingerprint,
+      fingerprint,
+    })
+  }
+
+  if (cachedKey) {
+    await deleteR2ObjectIfExists(s3, bucket, cachedKey)
+  }
+  if (expectedKey !== cachedKey) {
+    await deleteR2ObjectIfExists(s3, bucket, expectedKey)
+  }
+
+  const galleryRef = db.doc(`galleries/${galleryId}`)
+  await galleryRef.update({
+    zipExportR2Key: admin.firestore.FieldValue.delete(),
+    zipExportFingerprint: admin.firestore.FieldValue.delete(),
+    zipExportPhotoCount: admin.firestore.FieldValue.delete(),
+    zipExportBuiltAt: admin.firestore.FieldValue.delete(),
+  })
+
+  return { action: 'build', photoCount: photos.length, fingerprint }
 }
 
 async function loadPhotosForGallery(db, galleryId) {
@@ -119,7 +234,7 @@ async function appendPhotosToArchive({ s3, bucket, photos, archive, galleryId, j
 }
 
 /**
- * Streams a zip of all gallery originals into R2 at galleries/{galleryId}/exports/{jobId}.zip
+ * Streams a zip of all gallery originals into R2 at galleries/{galleryId}/exports/gallery.zip
  * using multipart upload (does not buffer the full archive in memory).
  */
 async function runGalleryZipJob(galleryId, jobId) {
@@ -139,7 +254,8 @@ async function runGalleryZipJob(galleryId, jobId) {
     throw new Error('No photos with a valid r2Key found for this gallery')
   }
 
-  const zipKey = `galleries/${galleryId}/exports/${jobId}.zip`
+  const zipKey = galleryZipExportKey(galleryId)
+  const fingerprint = computeGalleryZipFingerprint(photos)
   logger.info('galleryZipJob start', {
     galleryId,
     jobId,
@@ -207,18 +323,101 @@ async function runGalleryZipJob(galleryId, jobId) {
     throw err
   }
 
+  await db.doc(`galleries/${galleryId}`).update({
+    zipExportR2Key: zipKey,
+    zipExportFingerprint: fingerprint,
+    zipExportPhotoCount: photos.length,
+    zipExportBuiltAt: admin.firestore.FieldValue.serverTimestamp(),
+  })
+
   logger.info('galleryZipJob complete', {
     galleryId,
     jobId,
     photoCount: photos.length,
     zipKey,
+    fingerprint,
     totalMs: Date.now() - jobStartedAt,
   })
 
-  return { zipR2Key: zipKey, photoCount: photos.length }
+  return { zipR2Key: zipKey, photoCount: photos.length, fingerprint }
+}
+
+/** Deletes every object under each gallery's exports/ prefix in R2. */
+async function deleteAllGalleryExportZipsInR2() {
+  const env = getR2Env()
+  if (!env) {
+    throw new Error(
+      'R2 is not configured on Functions (set R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)',
+    )
+  }
+  const s3 = createR2S3Client(env)
+  const bucket = env.bucket
+  let continuationToken
+  let deletedCount = 0
+  let deletedBytes = 0
+
+  while (true) {
+    const page = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        MaxKeys: 1000,
+        ContinuationToken: continuationToken,
+      }),
+    )
+    for (const obj of page.Contents || []) {
+      const key = obj.Key
+      if (!key) continue
+      const classified = classifyGalleryObjectKey(key)
+      if (classified?.kind !== 'export') continue
+      await deleteR2ObjectIfExists(s3, bucket, key)
+      deletedCount += 1
+      deletedBytes += obj.Size || 0
+    }
+    if (!page.IsTruncated) break
+    continuationToken = page.NextContinuationToken
+  }
+
+  return { deletedCount, deletedBytes }
+}
+
+/** Clears zip export cache fields on all gallery documents. */
+async function clearAllGalleryZipExportMetadata(db) {
+  const snap = await db.collection('galleries').get()
+  let cleared = 0
+  let batch = db.batch()
+  let ops = 0
+
+  for (const doc of snap.docs) {
+    const d = doc.data()
+    if (!d.zipExportR2Key && !d.zipExportFingerprint) continue
+    batch.update(doc.ref, {
+      zipExportR2Key: admin.firestore.FieldValue.delete(),
+      zipExportFingerprint: admin.firestore.FieldValue.delete(),
+      zipExportPhotoCount: admin.firestore.FieldValue.delete(),
+      zipExportBuiltAt: admin.firestore.FieldValue.delete(),
+    })
+    cleared += 1
+    ops += 1
+    if (ops >= 400) {
+      await batch.commit()
+      batch = db.batch()
+      ops = 0
+    }
+  }
+  if (ops > 0) await batch.commit()
+  return cleared
+}
+
+async function cleanupAllGalleryExportZips() {
+  const db = admin.firestore()
+  const r2 = await deleteAllGalleryExportZipsInR2()
+  const galleriesCleared = await clearAllGalleryZipExportMetadata(db)
+  return { ...r2, galleriesCleared }
 }
 
 module.exports = {
   runGalleryZipJob,
+  resolveGalleryZipExport,
+  cleanupAllGalleryExportZips,
   isR2ZipExportConfigured,
 }

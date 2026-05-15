@@ -18,7 +18,7 @@
  * Endpoints:
  *   POST /sign-upload       -> { uploadUrl, objectKey }   10-minute presigned PUT URL
  *   POST /delete-object     -> { deleted: true }          server-side DELETE
- *   POST /storage-usage     -> { totalBytes, byGallery }  bucket usage summary
+ *   POST /storage-usage     -> { totalBytes, totalPhotoBytes, totalExportBytes, byGallery, exportZipByGallery }
  *   GET  /gallery-download  -> binary stream              HMAC-signed URL from issueGalleryDownloadTicket
  *
  * POST endpoints require: Authorization: Bearer <Firebase ID token> (admin only, except gallery-download ticket flow).
@@ -198,9 +198,14 @@ function decodeXmlEntities(value) {
     .replace(/&apos;/g, "'")
 }
 
-function usageGalleryIdFromKey(key) {
-  const match = String(key || '').match(/^galleries\/([^/]+)\//)
-  return match?.[1] || null
+/** @returns {{ galleryId: string, kind: 'photos' | 'export' } | null} */
+function classifyGalleryObjectKey(key) {
+  const match = String(key || '').match(/^galleries\/([^/]+)\/(.+)$/)
+  if (!match) return null
+  const galleryId = match[1]
+  const rest = match[2]
+  if (rest.startsWith('exports/')) return { galleryId, kind: 'export' }
+  return { galleryId, kind: 'photos' }
 }
 
 function parseListObjectsPage(xmlText) {
@@ -218,8 +223,11 @@ function parseListObjectsPage(xmlText) {
 async function listAllBucketUsage(env, client) {
   let continuationToken = ''
   let totalBytes = 0
+  let totalPhotoBytes = 0
+  let totalExportBytes = 0
   let objectCount = 0
   const byGallery = {}
+  const exportZipByGallery = {}
 
   while (true) {
     const listUrl = new URL(
@@ -243,9 +251,15 @@ async function listAllBucketUsage(env, client) {
     for (const obj of page.objects) {
       totalBytes += obj.size
       objectCount += 1
-      const galleryId = usageGalleryIdFromKey(obj.key)
-      if (galleryId) {
-        byGallery[galleryId] = (byGallery[galleryId] || 0) + obj.size
+      const classified = classifyGalleryObjectKey(obj.key)
+      if (!classified) continue
+      if (classified.kind === 'export') {
+        totalExportBytes += obj.size
+        exportZipByGallery[classified.galleryId] =
+          (exportZipByGallery[classified.galleryId] || 0) + obj.size
+      } else {
+        totalPhotoBytes += obj.size
+        byGallery[classified.galleryId] = (byGallery[classified.galleryId] || 0) + obj.size
       }
     }
 
@@ -253,7 +267,14 @@ async function listAllBucketUsage(env, client) {
     continuationToken = page.nextToken
   }
 
-  return { totalBytes, objectCount, byGallery }
+  return {
+    totalBytes,
+    totalPhotoBytes,
+    totalExportBytes,
+    objectCount,
+    byGallery,
+    exportZipByGallery,
+  }
 }
 
 async function handleStorageUsage(request, env, origin) {

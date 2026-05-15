@@ -2,19 +2,26 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
-  ChevronDown, Copy, CopyCheck, SquareArrowOutUpRight, Trash2
+  ChevronDown, Copy, CopyCheck, Info, SquareArrowOutUpRight, Trash2
 } from 'lucide-react'
 import { auth } from '../../lib/firebase'
 import { generateJpegThumbnailBlob } from '../../lib/generateJpegThumbnail'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
   addPhotoRecord,
+  cleanupGalleryExportZips,
   createGallery,
   deleteGalleryDocument,
   deletePhotoRecord,
   listGalleryPhotos,
   listGalleries,
 } from '../../services/galleryApi'
+import {
+  estimateR2MonthlyStorageUsd,
+  formatUsd,
+  R2_FREE_STORAGE_GB_MONTH,
+  R2_STANDARD_USD_PER_GB_MONTH,
+} from '../../lib/r2StorageEstimate'
 import { deleteFromR2, getR2StorageUsage, uploadToR2WithPresign } from '../../services/r2UploadApi'
 import {
   buildGalleryPhotoUploadBasename,
@@ -45,16 +52,52 @@ function GalleryAdminPage() {
   const [advancedUploadOpen, setAdvancedUploadOpen] = useState(false)
   const [copyStatus, setCopyStatus] = useState(false)
   const [storageTotalBytes, setStorageTotalBytes] = useState(0)
+  const [storagePhotoTotalBytes, setStoragePhotoTotalBytes] = useState(0)
+  const [storageExportTotalBytes, setStorageExportTotalBytes] = useState(0)
   const [storageByGallery, setStorageByGallery] = useState({})
+  const [storageExportZipByGallery, setStorageExportZipByGallery] = useState({})
+  const [storageInfoOpen, setStorageInfoOpen] = useState(false)
+  const [cleanupExportZipsConfirm, setCleanupExportZipsConfirm] = useState(false)
   const [deleteConfirmGallery, setDeleteConfirmGallery] = useState(null)
   /** Set only while a multi-file R2 upload is running; drives the progress bar. */
   const [uploadProgress, setUploadProgress] = useState(null)
   const fileInputRef = useRef(null)
+  const storageInfoRef = useRef(null)
 
   const selected = useMemo(
     () => galleries.find((g) => g.id === selectedId) || null,
     [galleries, selectedId],
   )
+
+  const galleryStorageTotalBytes = (galleryId) =>
+    (storageByGallery[galleryId] || 0) + (storageExportZipByGallery[galleryId] || 0)
+
+  const selectedExportZipBytes = selectedId ? storageExportZipByGallery[selectedId] || 0 : 0
+  const selectedGalleryTotalBytes = selectedId ? galleryStorageTotalBytes(selectedId) : 0
+  const selectedHasExportZip = selectedExportZipBytes > 0
+
+  const storageOtherBytes = Math.max(
+    0,
+    storageTotalBytes - storagePhotoTotalBytes - storageExportTotalBytes,
+  )
+  const estimatedMonthlyUsd = estimateR2MonthlyStorageUsd(storageTotalBytes)
+
+  useEffect(() => {
+    if (!storageInfoOpen) return undefined
+    const onPointerDown = (ev) => {
+      if (storageInfoRef.current?.contains(ev.target)) return
+      setStorageInfoOpen(false)
+    }
+    const onKeyDown = (ev) => {
+      if (ev.key === 'Escape') setStorageInfoOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [storageInfoOpen])
 
   useEffect(() => {
     if (!deleteConfirmGallery) return
@@ -66,6 +109,17 @@ function GalleryAdminPage() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [deleteConfirmGallery, busy])
+
+  useEffect(() => {
+    if (!cleanupExportZipsConfirm) return
+    const onKey = (ev) => {
+      if (ev.key === 'Escape' && !busy) {
+        setCleanupExportZipsConfirm(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [cleanupExportZipsConfirm, busy])
 
   // Scroll lock
   useEffect(() => {
@@ -160,12 +214,18 @@ function GalleryAdminPage() {
         const usage = await getR2StorageUsage()
         if (!cancelled) {
           setStorageTotalBytes(usage.totalBytes || 0)
+          setStoragePhotoTotalBytes(usage.totalPhotoBytes || 0)
+          setStorageExportTotalBytes(usage.totalExportBytes || 0)
           setStorageByGallery(usage.byGallery || {})
+          setStorageExportZipByGallery(usage.exportZipByGallery || {})
         }
       } catch {
         if (!cancelled) {
           setStorageTotalBytes(0)
+          setStoragePhotoTotalBytes(0)
+          setStorageExportTotalBytes(0)
           setStorageByGallery({})
+          setStorageExportZipByGallery({})
         }
       }
     })()
@@ -211,9 +271,36 @@ function GalleryAdminPage() {
     try {
       const usage = await getR2StorageUsage()
       setStorageTotalBytes(usage.totalBytes || 0)
+      setStoragePhotoTotalBytes(usage.totalPhotoBytes || 0)
+      setStorageExportTotalBytes(usage.totalExportBytes || 0)
       setStorageByGallery(usage.byGallery || {})
+      setStorageExportZipByGallery(usage.exportZipByGallery || {})
     } catch {
       // Do not block admin actions if usage endpoint is unavailable.
+    }
+  }
+
+  const onRequestCleanupExportZips = () => {
+    if (storageExportTotalBytes <= 0) return
+    setCleanupExportZipsConfirm(true)
+  }
+
+  const onConfirmCleanupExportZips = async () => {
+    setBusy(true)
+    setLoadError('')
+    try {
+      const result = await cleanupGalleryExportZips()
+      setCleanupExportZipsConfirm(false)
+      setStorageInfoOpen(false)
+      await refreshGalleries()
+      const count = Number(result.deletedCount) || 0
+      if (count === 0) {
+        setLoadError('No export zip files were found to delete.')
+      }
+    } catch (err) {
+      setLoadError(err?.message || 'Could not clean up export zips')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -492,9 +579,70 @@ function GalleryAdminPage() {
           <p className="mt-2 text-xs leading-relaxed text-zinc-500">
             Manage your galleries and photos here.  Storage is running on Cloudflare R2 with Firebase Firestore for metadata.
           </p>
-          <p className="mt-3 text-xs text-zinc-400">
-            Total storage used: <span className="font-mono text-zinc-200">~{formatBytes(storageTotalBytes)}</span>
-          </p>
+          <div ref={storageInfoRef} className="relative mt-3">
+            <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-zinc-400">
+              <span>Total storage used:</span>
+              <span className="font-mono text-zinc-200">~{formatBytes(storageTotalBytes)}</span>
+              <button
+                type="button"
+                onClick={() => setStorageInfoOpen((open) => !open)}
+                aria-expanded={storageInfoOpen}
+                aria-controls="storage-info-panel"
+                aria-label={storageInfoOpen ? 'Hide storage details' : 'Show storage details'}
+                className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded p-0.5 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+              >
+                <Info className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </p>
+            {storageInfoOpen ? (
+              <div
+                id="storage-info-panel"
+                role="region"
+                aria-label="Storage breakdown"
+                className="absolute left-0 top-full z-30 mt-2 w-[min(100%,18rem)] rounded-xl border border-zinc-700 bg-zinc-950 p-3 text-xs text-zinc-300 shadow-xl"
+              >
+                <p className="font-medium text-zinc-100">R2 storage breakdown</p>
+                <dl className="mt-2 space-y-1.5">
+                  <div className="flex justify-between gap-3">
+                    <dt>Photos &amp; thumbnails</dt>
+                    <dd className="shrink-0 font-mono text-zinc-200">{formatBytes(storagePhotoTotalBytes)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt>Download-all zips</dt>
+                    <dd className="shrink-0 font-mono text-zinc-200">{formatBytes(storageExportTotalBytes)}</dd>
+                  </div>
+                  {storageOtherBytes > 0 ? (
+                    <div className="flex justify-between gap-3">
+                      <dt>Other objects</dt>
+                      <dd className="shrink-0 font-mono text-zinc-200">{formatBytes(storageOtherBytes)}</dd>
+                    </div>
+                  ) : null}
+                  <div className="flex justify-between gap-3 border-t border-zinc-800 pt-1.5 font-medium">
+                    <dt>Total in bucket</dt>
+                    <dd className="shrink-0 font-mono text-zinc-100">{formatBytes(storageTotalBytes)}</dd>
+                  </div>
+                </dl>
+                <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+                  Estimated storage cost:{' '}
+                  <span className="font-mono text-zinc-300">{formatUsd(estimatedMonthlyUsd)}/mo</span>
+                </p>
+                <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+                R2 Standard at ${R2_STANDARD_USD_PER_GB_MONTH}/GB-month after {R2_FREE_STORAGE_GB_MONTH} GB free, per month.
+                </p>
+                <button
+                  type="button"
+                  disabled={busy || storageExportTotalBytes <= 0}
+                  onClick={onRequestCleanupExportZips}
+                  className="mt-3 w-full cursor-pointer rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2 text-xs font-semibold text-white transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? 'Working…' : 'Clean up export zips'}
+                </button>
+                {storageExportTotalBytes <= 0 ? (
+                  <p className="mt-1.5 text-[11px] text-zinc-600">No export zips in the bucket.</p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
 
           {loadError && (
             <p className="mt-4 rounded border border-red-900/50 bg-red-950/40 px-3 py-2 text-xs text-red-100">
@@ -521,7 +669,7 @@ function GalleryAdminPage() {
                   <span className="mt-1 font-mono text-xs text-zinc-500">{g.id}</span>
                   <span className="mt-1 text-xs text-zinc-400">
                     {g.photoCount ? `${g.photoCount} photos` : 'No photos yet'} ·{' '}
-                    {g.photoCount ? formatBytes(storageByGallery[g.id] || 0) : '0 B'}
+                    {formatBytes(galleryStorageTotalBytes(g.id))}
                   </span>
                 </button>
                 <button
@@ -729,8 +877,24 @@ function GalleryAdminPage() {
 
                 <div className="flex min-h-0 flex-col lg:h-full">
                   <h3 className="text-sm font-semibold text-zinc-200">
-                  {photos.length ? `${photos.length} photos` : 'No photos yet'} · {photos.length ? formatBytes(storageByGallery[selected.id] || 0) : '0 B'}
+                    {photos.length ? `${photos.length} photos` : 'No photos yet'} ·{' '}
+                    {formatBytes(selectedGalleryTotalBytes - selectedExportZipBytes)}
                   </h3>
+                  {selectedHasExportZip && (
+                  <p className="mt-1 font-mono text-xs text-zinc-500">
+                    <span className="font-mono text-zinc-300">gallery.zip: </span>{formatBytes(selectedExportZipBytes)}
+                      {selected?.zipExportBuiltAt?.toDate ? (
+                        <>
+                          {' '}
+                          · generated{' '}
+                          {selected.zipExportBuiltAt.toDate().toLocaleString(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          })}
+                        </>
+                      ) : null}
+                  </p>
+                  )}
                   <ul className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 lg:max-h-none">
                     {photos.map((p) => {
                       const fullUrl = r2PublicUrl(p.r2Key)
@@ -784,6 +948,48 @@ function GalleryAdminPage() {
           )}
         </section>
       </div>
+
+      {cleanupExportZipsConfirm ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cleanup-export-zips-dialog-title"
+          onClick={() => !busy && setCleanupExportZipsConfirm(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-950 p-5 shadow-xl"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <h2 id="cleanup-export-zips-dialog-title" className="text-lg font-semibold text-white">
+              Clean up export zips?
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+              This permanently deletes all download-all zip files from R2 (
+              <span className="font-mono text-zinc-300">{formatBytes(storageExportTotalBytes)}</span>
+              ). Photos and thumbnails are not affected. Clients can generate a fresh zip when they click 'Download All'.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                className="cursor-pointer rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-900 disabled:opacity-50"
+                onClick={() => setCleanupExportZipsConfirm(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500 disabled:opacity-50"
+                onClick={onConfirmCleanupExportZips}
+              >
+                {busy ? 'Cleaning up…' : 'Delete export zips'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {deleteConfirmGallery ? (
         <div

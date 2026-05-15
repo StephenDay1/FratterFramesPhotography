@@ -94,11 +94,27 @@ export async function getR2StorageUsage() {
   }
 
   const data = await res.json()
+  const byGallery =
+    data?.byGallery && typeof data.byGallery === 'object' && !Array.isArray(data.byGallery)
+      ? data.byGallery
+      : {}
+  const exportZipByGallery =
+    data?.exportZipByGallery &&
+    typeof data.exportZipByGallery === 'object' &&
+    !Array.isArray(data.exportZipByGallery)
+      ? data.exportZipByGallery
+      : {}
+  const totalPhotoBytes = Number.isFinite(data?.totalPhotoBytes)
+    ? data.totalPhotoBytes
+    : Object.values(byGallery).reduce((sum, n) => sum + (Number(n) || 0), 0)
+  const totalExportBytes = Number.isFinite(data?.totalExportBytes)
+    ? data.totalExportBytes
+    : Object.values(exportZipByGallery).reduce((sum, n) => sum + (Number(n) || 0), 0)
   return {
     totalBytes: Number.isFinite(data?.totalBytes) ? data.totalBytes : 0,
-    byGallery:
-      data?.byGallery && typeof data.byGallery === 'object' && !Array.isArray(data.byGallery)
-        ? data.byGallery
-        : {},
+    totalPhotoBytes,
+    totalExportBytes,
+    byGallery,
+    exportZipByGallery,
   }
 }

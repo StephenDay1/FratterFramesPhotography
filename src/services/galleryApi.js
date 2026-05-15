@@ -142,9 +142,16 @@ export async function issueGalleryDownloadTicket({ galleryId, objectKey, filenam
 }
 
 /**
- * Queues a backend zip of all originals (see Functions: startGalleryZipExport + onGalleryZipJobQueued).
- * Returns jobId; subscribe with subscribeGalleryZipJob.
+ * Starts or reuses a backend zip of all originals (see Functions: startGalleryZipExport).
+ * Returns jobId and whether an existing zip was reused; subscribe with subscribeGalleryZipJob.
  */
+/** Deletes all download-all zips in R2 and clears zip cache fields on every gallery. */
+export async function cleanupGalleryExportZips() {
+  const fn = httpsCallable(functions, 'cleanupGalleryExportZips')
+  const result = await fn()
+  return result.data || {}
+}
+
 export async function startGalleryZipExport(galleryId) {
   const fn = httpsCallable(functions, 'startGalleryZipExport')
   const result = await fn({ galleryId })
@@ -152,7 +159,10 @@ export async function startGalleryZipExport(galleryId) {
   if (typeof jobId !== 'string' || !jobId.trim()) {
     throw new Error('No zip job id returned')
   }
-  return jobId.trim()
+  return {
+    jobId: jobId.trim(),
+    reused: result.data?.reused === true,
+  }
 }
 
 /**

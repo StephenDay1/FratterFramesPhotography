@@ -39,10 +39,30 @@ if (!admin.apps.length) {
   })
 }
 
-const { runGalleryZipJob, isR2ZipExportConfigured } = require('./galleryZipJob')
+const {
+  runGalleryZipJob,
+  resolveGalleryZipExport,
+  cleanupAllGalleryExportZips,
+  isR2ZipExportConfigured,
+} = require('./galleryZipJob')
 
 function tokenIsGalleryAdmin(token) {
   return token?.admin === true
+}
+
+async function assertGalleryStorageManager(request) {
+  if (!request.auth?.uid) {
+    throw new HttpsError('unauthenticated', 'Sign in required')
+  }
+  if (tokenIsGalleryAdmin(request.auth.token || {})) return
+  const owned = await admin
+    .firestore()
+    .collection('galleries')
+    .where('ownerUid', '==', request.auth.uid)
+    .limit(1)
+    .get()
+  if (!owned.empty) return
+  throw new HttpsError('permission-denied', 'Not allowed')
 }
 
 /** App Engine default SA for Cloud Run runtime (Gen 2 pin). */
@@ -308,13 +328,69 @@ exports.startGalleryZipExport = onCall(
       )
     }
 
+    const db = admin.firestore()
+    let resolved
+    try {
+      resolved = await resolveGalleryZipExport(db, galleryId, data)
+    } catch (err) {
+      if (err?.message?.includes('No photos')) {
+        throw new HttpsError('failed-precondition', err.message)
+      }
+      logger.error('resolveGalleryZipExport failed', { galleryId, err })
+      throw new HttpsError('internal', err?.message || 'Could not prepare zip export')
+    }
+
     const jobId = randomUUID()
-    await admin.firestore().doc(`galleries/${galleryId}/zipJobs/${jobId}`).set({
+    const jobRef = db.doc(`galleries/${galleryId}/zipJobs/${jobId}`)
+
+    if (resolved.action === 'reuse') {
+      await jobRef.set({
+        status: 'ready',
+        zipR2Key: resolved.zipR2Key,
+        photoCount: resolved.photoCount,
+        reused: true,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+      return { jobId, reused: true }
+    }
+
+    await jobRef.set({
       status: 'queued',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     })
 
-    return { jobId }
+    return { jobId, reused: false }
+  },
+)
+
+/** Deletes all download-all zips in R2 and clears zip cache metadata on every gallery. */
+exports.cleanupGalleryExportZips = onCall(
+  {
+    region: 'us-central1',
+    ...(appspotServiceAccount ? { serviceAccount: appspotServiceAccount } : {}),
+    invoker: 'public',
+    cors: true,
+    ingressSettings: 'ALLOW_ALL',
+    secrets: R2_ZIP_EXPORT_SECRETS,
+  },
+  async (request) => {
+    await assertGalleryStorageManager(request)
+
+    if (!isR2ZipExportConfigured()) {
+      throw new HttpsError(
+        'failed-precondition',
+        'R2 is not configured on Functions (set R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)',
+      )
+    }
+
+    try {
+      const result = await cleanupAllGalleryExportZips()
+      return result
+    } catch (err) {
+      logger.error('cleanupGalleryExportZips failed', err)
+      throw new HttpsError('internal', err?.message || 'Cleanup failed')
+    }
   },
 )
 

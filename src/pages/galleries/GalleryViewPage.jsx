@@ -370,13 +370,13 @@ function GalleryViewPage() {
     zipJobUnsubRef.current = () => {}
 
     try {
-      const jobId = await startGalleryZipExport(galleryId)
+      const { jobId, reused } = await startGalleryZipExport(galleryId)
       if (session !== zipSessionRef.current) {
         setZipAllBusy(false)
         setZipAllMessage('')
         return
       }
-      setZipAllMessage('Building zip on server…')
+      setZipAllMessage(reused ? 'Using saved gallery zip…' : 'Building zip on server…')
 
       const unsub = subscribeGalleryZipJob(
         galleryId,
@@ -394,6 +394,10 @@ function GalleryViewPage() {
           }
           if (data.status === 'processing') {
             setZipAllMessage('Zipping originals (large galleries may take several minutes)…')
+            return
+          }
+          if (data.status === 'queued') {
+            setZipAllMessage('Building zip on server…')
             return
           }
           if (data.status === 'ready' && typeof data.zipR2Key === 'string' && data.zipR2Key) {
