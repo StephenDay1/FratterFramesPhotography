@@ -393,7 +393,7 @@ function GalleryViewPage() {
             return
           }
           if (data.status === 'processing') {
-            setZipAllMessage('Zipping originals (large galleries may take several minutes)…')
+            setZipAllMessage('Zipping photos (this may take several minutes)…')
             return
           }
           if (data.status === 'queued') {
