@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
-  ChevronDown, Copy, CopyCheck, Info, SquareArrowOutUpRight, Trash2
+  CheckSquare, ChevronDown, Copy, CopyCheck, Info, Square, SquareArrowOutUpRight, Trash2
 } from 'lucide-react'
 import { auth } from '../../lib/firebase'
 import { generateJpegThumbnailBlob } from '../../lib/generateJpegThumbnail'
@@ -36,6 +36,42 @@ async function userIsGalleryViewer(user) {
   return Boolean(r.claims?.galleryViewer)
 }
 
+function truncateProgressLabel(text) {
+  const value = String(text || '')
+  return value.length > 40 ? `${value.slice(0, 37)}…` : value
+}
+
+function OperationProgressBar({ progress, ariaLabelPrefix }) {
+  if (!progress?.total) return null
+  return (
+    <div className="mt-3 max-w-xs">
+      <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-zinc-500">
+        <span className="min-w-0 truncate" title={progress.currentLabel}>
+          {progress.currentLabel || ' '}
+        </span>
+        <span className="shrink-0 font-mono tabular-nums">
+          {progress.done}/{progress.total}
+        </span>
+      </div>
+      <div
+        className="h-2 overflow-hidden rounded-full bg-zinc-800"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={progress.total}
+        aria-valuenow={progress.done}
+        aria-label={`${ariaLabelPrefix} ${progress.done} of ${progress.total}`}
+      >
+        <div
+          className="h-full rounded-full bg-zinc-300 transition-[width] duration-200 ease-out"
+          style={{
+            width: `${progress.total ? (100 * progress.done) / progress.total : 0}%`,
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
 function GalleryAdminPage() {
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
@@ -56,11 +92,16 @@ function GalleryAdminPage() {
   const [storageExportTotalBytes, setStorageExportTotalBytes] = useState(0)
   const [storageByGallery, setStorageByGallery] = useState({})
   const [storageExportZipByGallery, setStorageExportZipByGallery] = useState({})
+  const [objectSizesByKey, setObjectSizesByKey] = useState({})
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedPhotoIds, setSelectedPhotoIds] = useState(() => new Set())
   const [storageInfoOpen, setStorageInfoOpen] = useState(false)
   const [cleanupExportZipsConfirm, setCleanupExportZipsConfirm] = useState(false)
   const [deleteConfirmGallery, setDeleteConfirmGallery] = useState(null)
   /** Set only while a multi-file R2 upload is running; drives the progress bar. */
   const [uploadProgress, setUploadProgress] = useState(null)
+  /** Set only while bulk-deleting photos; drives the delete progress bar. */
+  const [deleteProgress, setDeleteProgress] = useState(null)
   const fileInputRef = useRef(null)
   const storageInfoRef = useRef(null)
 
@@ -184,6 +225,11 @@ function GalleryAdminPage() {
   }, [user, viewerBlocked])
 
   useEffect(() => {
+    setSelectionMode(false)
+    setSelectedPhotoIds(new Set())
+  }, [selectedId])
+
+  useEffect(() => {
     if (!selectedId || viewerBlocked) return
     let cancelled = false
     ;(async () => {
@@ -218,6 +264,7 @@ function GalleryAdminPage() {
           setStorageExportTotalBytes(usage.totalExportBytes || 0)
           setStorageByGallery(usage.byGallery || {})
           setStorageExportZipByGallery(usage.exportZipByGallery || {})
+          setObjectSizesByKey(usage.objectSizes || {})
         }
       } catch {
         if (!cancelled) {
@@ -226,6 +273,7 @@ function GalleryAdminPage() {
           setStorageExportTotalBytes(0)
           setStorageByGallery({})
           setStorageExportZipByGallery({})
+          setObjectSizesByKey({})
         }
       }
     })()
@@ -275,9 +323,53 @@ function GalleryAdminPage() {
       setStorageExportTotalBytes(usage.totalExportBytes || 0)
       setStorageByGallery(usage.byGallery || {})
       setStorageExportZipByGallery(usage.exportZipByGallery || {})
+      setObjectSizesByKey(usage.objectSizes || {})
     } catch {
       // Do not block admin actions if usage endpoint is unavailable.
     }
+  }
+
+  const photoStorageBytes = (photo) => {
+    const full = Number(objectSizesByKey[photo.r2Key]) || 0
+    const thumb = photo.thumbR2Key ? Number(objectSizesByKey[photo.thumbR2Key]) || 0 : 0
+    return full + thumb
+  }
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false)
+    setSelectedPhotoIds(new Set())
+  }
+
+  const togglePhotoSelected = (photoId) => {
+    setSelectedPhotoIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(photoId)) next.delete(photoId)
+      else next.add(photoId)
+      return next
+    })
+  }
+
+  const onSelectAllPhotos = () => {
+    setSelectedPhotoIds(new Set(photos.map((p) => p.id)))
+  }
+
+  const deletePhotoFromStorage = async (photo) => {
+    if (photo.thumbR2Key) {
+      try {
+        await deleteFromR2(photo.thumbR2Key)
+      } catch (err) {
+        console.warn('R2 thumb delete failed', err)
+      }
+    }
+    if (photo?.r2Key) {
+      try {
+        await deleteFromR2(photo.r2Key)
+      } catch (err) {
+        console.warn('R2 delete failed; removing Firestore record anyway', err)
+        setLoadError(`R2 delete failed (${err?.message || 'unknown'}); record removed.`)
+      }
+    }
+    await deletePhotoRecord(selectedId, photo.id)
   }
 
   const onRequestCleanupExportZips = () => {
@@ -468,29 +560,43 @@ function GalleryAdminPage() {
     try {
       const photo = photos.find((p) => p.id === photoDocId)
       if (!photo) return
-      if (photo.thumbR2Key) {
-        try {
-          await deleteFromR2(photo.thumbR2Key)
-        } catch (err) {
-          console.warn('R2 thumb delete failed', err)
-        }
-      }
-      if (photo?.r2Key) {
-        try {
-          await deleteFromR2(photo.r2Key)
-        } catch (err) {
-          // Don't block Firestore cleanup if R2 delete fails — surface a warning,
-          // but still let the user remove the dangling record.
-          console.warn('R2 delete failed; removing Firestore record anyway', err)
-          setLoadError(`R2 delete failed (${err?.message || 'unknown'}); record removed.`)
-        }
-      }
-      await deletePhotoRecord(selectedId, photoDocId)
+      await deletePhotoFromStorage(photo)
+      setSelectedPhotoIds((prev) => {
+        if (!prev.has(photoDocId)) return prev
+        const next = new Set(prev)
+        next.delete(photoDocId)
+        return next
+      })
       await refreshPhotos()
     } catch (err) {
       setLoadError(err?.message || 'Could not delete photo')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const onDeleteSelectedPhotos = async () => {
+    if (!selectedId || selectedPhotoIds.size === 0) return
+    const toDelete = photos.filter((p) => selectedPhotoIds.has(p.id))
+    const firstLabel = truncateProgressLabel(toDelete[0]?.filename || 'photo')
+    setBusy(true)
+    setLoadError('')
+    setDeleteProgress({ done: 0, total: toDelete.length, currentLabel: firstLabel })
+    try {
+      for (let i = 0; i < toDelete.length; i++) {
+        const photo = toDelete[i]
+        const label = truncateProgressLabel(photo.filename || 'photo')
+        setDeleteProgress({ done: i, total: toDelete.length, currentLabel: label })
+        await deletePhotoFromStorage(photo)
+        setDeleteProgress({ done: i + 1, total: toDelete.length, currentLabel: label })
+      }
+      exitSelectionMode()
+      await refreshPhotos()
+    } catch (err) {
+      setLoadError(err?.message || 'Could not delete selected photos')
+    } finally {
+      setBusy(false)
+      setDeleteProgress(null)
     }
   }
 
@@ -780,33 +886,7 @@ function GalleryAdminPage() {
                           ? 'Uploading…'
                           : 'Choose files…'}
                     </button>
-                    {uploadProgress && uploadProgress.total > 0 ? (
-                      <div className="mt-3 max-w-xs">
-                        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-zinc-500">
-                          <span className="min-w-0 truncate" title={uploadProgress.currentLabel}>
-                            {uploadProgress.currentLabel || ' '}
-                          </span>
-                          <span className="shrink-0 font-mono tabular-nums">
-                            {uploadProgress.done}/{uploadProgress.total}
-                          </span>
-                        </div>
-                        <div
-                          className="h-2 overflow-hidden rounded-full bg-zinc-800"
-                          role="progressbar"
-                          aria-valuemin={0}
-                          aria-valuemax={uploadProgress.total}
-                          aria-valuenow={uploadProgress.done}
-                          aria-label={`Upload progress ${uploadProgress.done} of ${uploadProgress.total}`}
-                        >
-                          <div
-                            className="h-full rounded-full bg-zinc-300 transition-[width] duration-200 ease-out"
-                            style={{
-                              width: `${uploadProgress.total ? (100 * uploadProgress.done) / uploadProgress.total : 0}%`,
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ) : null}
+                    <OperationProgressBar progress={uploadProgress} ariaLabelPrefix="Upload progress" />
                   </div>
 
                   <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-950/40">
@@ -876,10 +956,59 @@ function GalleryAdminPage() {
                 </div>
 
                 <div className="flex min-h-0 flex-col lg:h-full">
-                  <h3 className="text-sm font-semibold text-zinc-200">
-                    {photos.length ? `${photos.length} photos` : 'No photos yet'} ·{' '}
-                    {formatBytes(selectedGalleryTotalBytes - selectedExportZipBytes)}
-                  </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-zinc-200">
+                      {photos.length ? `${photos.length} photos` : 'No photos yet'} ·{' '}
+                      {formatBytes(selectedGalleryTotalBytes - selectedExportZipBytes)}
+                    </h3>
+                    {photos.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {selectionMode ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busy || selectedPhotoIds.size === photos.length}
+                              onClick={onSelectAllPhotos}
+                              className="cursor-pointer rounded-lg border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Select all
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy || selectedPhotoIds.size === 0}
+                              onClick={onDeleteSelectedPhotos}
+                              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-red-900/60 bg-red-950/40 px-2.5 py-1 text-xs font-medium text-red-200 transition hover:border-red-800 hover:bg-red-950/70 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              {busy && deleteProgress
+                                ? `Deleting ${deleteProgress.done}/${deleteProgress.total}…`
+                                : 'Delete selected'}
+                              {!busy && selectedPhotoIds.size > 0 ? ` (${selectedPhotoIds.size})` : ''}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={exitSelectionMode}
+                              className="cursor-pointer rounded-lg border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-300 transition hover:border-zinc-500 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setSelectionMode(true)}
+                            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <CheckSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                            Select photos
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                  <OperationProgressBar progress={deleteProgress} ariaLabelPrefix="Delete progress" />
                   {selectedHasExportZip && (
                   <p className="mt-1 font-mono text-xs text-zinc-500">
                     <span className="font-mono text-zinc-300">gallery.zip: </span>{formatBytes(selectedExportZipBytes)}
@@ -899,11 +1028,41 @@ function GalleryAdminPage() {
                     {photos.map((p) => {
                       const fullUrl = r2PublicUrl(p.r2Key)
                       const thumbUrl = r2PhotoPreviewUrl(p) || fullUrl
+                      const bytes = photoStorageBytes(p)
+                      const isSelected = selectedPhotoIds.has(p.id)
                       return (
                         <li
                           key={p.id}
-                          className="flex gap-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2"
+                          className={`flex gap-3 rounded-lg border p-2 transition ${
+                            selectionMode && isSelected
+                              ? 'border-zinc-500 bg-zinc-900/80'
+                              : 'border-zinc-800 bg-zinc-950/60'
+                          }${selectionMode ? ' cursor-pointer' : ''}`}
+                          onClick={
+                            selectionMode && !busy
+                              ? () => togglePhotoSelected(p.id)
+                              : undefined
+                          }
                         >
+                          {selectionMode ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={(ev) => {
+                                ev.stopPropagation()
+                                togglePhotoSelected(p.id)
+                              }}
+                              aria-pressed={isSelected}
+                              aria-label={isSelected ? `Deselect ${p.filename}` : `Select ${p.filename}`}
+                              className="mt-0.5 shrink-0 cursor-pointer text-zinc-400 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {isSelected ? (
+                                <CheckSquare className="h-5 w-5 text-white" aria-hidden="true" />
+                              ) : (
+                                <Square className="h-5 w-5" aria-hidden="true" />
+                              )}
+                            </button>
+                          ) : null}
                           <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md bg-zinc-900">
                             {thumbUrl ? (
                               <img
@@ -920,24 +1079,21 @@ function GalleryAdminPage() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm">{p.filename}</p>
-                            <p dir="rtl" className="truncate text-right font-mono text-xs text-zinc-500">{p.r2Key}</p>
-                            {/* <button
+                            <p className="mt-0.5 font-mono text-xs text-zinc-500">
+                              {bytes > 0 ? formatBytes(bytes) : 'Size unknown'}
+                            </p>
+                          </div>
+                          {!selectionMode ? (
+                            <button
                               type="button"
-                              className="mt-1 text-xs text-red-300 underline"
+                              className="mt-1 shrink-0 text-xs text-zinc-500 transition hover:text-red-300 cursor-pointer"
                               onClick={() => onDeletePhoto(p.id)}
                               disabled={busy}
+                              aria-label={`Delete ${p.filename}`}
                             >
-                              Delete
-                            </button> */}
-                          </div>
-                          <button
-                            type="button"
-                            className="mt-1 text-xs text-zinc-500 hover:text-red-300 cursor-pointer transition"
-                            onClick={() => onDeletePhoto(p.id)}
-                            disabled={busy}
-                          >
-                            <Trash2 className="h-4 w-4" aria-hidden="true" />
-                          </button>
+                              <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            </button>
+                          ) : null}
                         </li>
                       )
                     })}

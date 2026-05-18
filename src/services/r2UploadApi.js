@@ -104,6 +104,10 @@ export async function getR2StorageUsage() {
     !Array.isArray(data.exportZipByGallery)
       ? data.exportZipByGallery
       : {}
+  const objectSizes =
+    data?.objectSizes && typeof data.objectSizes === 'object' && !Array.isArray(data.objectSizes)
+      ? data.objectSizes
+      : {}
   const totalPhotoBytes = Number.isFinite(data?.totalPhotoBytes)
     ? data.totalPhotoBytes
     : Object.values(byGallery).reduce((sum, n) => sum + (Number(n) || 0), 0)
@@ -116,5 +120,6 @@ export async function getR2StorageUsage() {
     totalExportBytes,
     byGallery,
     exportZipByGallery,
+    objectSizes,
   }
 }

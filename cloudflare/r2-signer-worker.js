@@ -228,6 +228,7 @@ async function listAllBucketUsage(env, client) {
   let objectCount = 0
   const byGallery = {}
   const exportZipByGallery = {}
+  const objectSizes = {}
 
   while (true) {
     const listUrl = new URL(
@@ -251,6 +252,7 @@ async function listAllBucketUsage(env, client) {
     for (const obj of page.objects) {
       totalBytes += obj.size
       objectCount += 1
+      objectSizes[obj.key] = obj.size
       const classified = classifyGalleryObjectKey(obj.key)
       if (!classified) continue
       if (classified.kind === 'export') {
@@ -274,6 +276,7 @@ async function listAllBucketUsage(env, client) {
     objectCount,
     byGallery,
     exportZipByGallery,
+    objectSizes,
   }
 }
 
