@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
-  CheckSquare, ChevronDown, Copy, CopyCheck, Info, Square, SquareArrowOutUpRight, Trash2
+  CheckSquare, ChevronDown, Copy, CopyCheck, Info, Square, SquareArrowOutUpRight, Star, Trash2
 } from 'lucide-react'
 import { auth } from '../../lib/firebase'
 import { generateJpegThumbnailBlob } from '../../lib/generateJpegThumbnail'
@@ -15,6 +15,7 @@ import {
   deletePhotoRecord,
   listGalleryPhotos,
   listGalleries,
+  setGalleryThumbnailPhoto,
 } from '../../services/galleryApi'
 import {
   estimateR2MonthlyStorageUsd,
@@ -353,6 +354,48 @@ function GalleryAdminPage() {
     setSelectedPhotoIds(new Set(photos.map((p) => p.id)))
   }
 
+  const patchGalleryThumbnailInList = (galleryId, photoDocId, photoRecord) => {
+    setGalleries((prev) =>
+      prev.map((gallery) => {
+        if (gallery.id !== galleryId) return gallery
+        if (!photoDocId) {
+          const { thumbnailPhotoId, thumbnailPhoto, ...rest } = gallery
+          return rest
+        }
+        return {
+          ...gallery,
+          thumbnailPhotoId: photoDocId,
+          thumbnailPhoto: photoRecord ?? gallery.thumbnailPhoto,
+        }
+      }),
+    )
+  }
+
+  const clearGalleryThumbnailIfPhoto = async (photoDocId) => {
+    if (!selectedId || selected?.thumbnailPhotoId !== photoDocId) return
+    await setGalleryThumbnailPhoto(selectedId, null)
+    patchGalleryThumbnailInList(selectedId, null)
+  }
+
+  const onToggleThumbnailPhoto = async (photoDocId) => {
+    if (!selectedId || busy) return
+    const previousId = selected?.thumbnailPhotoId ?? null
+    const previousPhoto = selected?.thumbnailPhoto ?? null
+    const nextId = previousId === photoDocId ? null : photoDocId
+    const nextPhoto = nextId ? photos.find((p) => p.id === nextId) ?? null : null
+    patchGalleryThumbnailInList(selectedId, nextId, nextPhoto)
+    try {
+      await setGalleryThumbnailPhoto(selectedId, nextId)
+    } catch (err) {
+      patchGalleryThumbnailInList(
+        selectedId,
+        previousId || null,
+        previousId ? previousPhoto : null,
+      )
+      setLoadError(err?.message || 'Could not update gallery thumbnail')
+    }
+  }
+
   const deletePhotoFromStorage = async (photo) => {
     if (photo.thumbR2Key) {
       try {
@@ -561,6 +604,7 @@ function GalleryAdminPage() {
       const photo = photos.find((p) => p.id === photoDocId)
       if (!photo) return
       await deletePhotoFromStorage(photo)
+      await clearGalleryThumbnailIfPhoto(photoDocId)
       setSelectedPhotoIds((prev) => {
         if (!prev.has(photoDocId)) return prev
         const next = new Set(prev)
@@ -583,12 +627,17 @@ function GalleryAdminPage() {
     setLoadError('')
     setDeleteProgress({ done: 0, total: toDelete.length, currentLabel: firstLabel })
     try {
+      const thumbnailBeingDeleted = toDelete.some((p) => p.id === selected?.thumbnailPhotoId)
       for (let i = 0; i < toDelete.length; i++) {
         const photo = toDelete[i]
         const label = truncateProgressLabel(photo.filename || 'photo')
         setDeleteProgress({ done: i, total: toDelete.length, currentLabel: label })
         await deletePhotoFromStorage(photo)
         setDeleteProgress({ done: i + 1, total: toDelete.length, currentLabel: label })
+      }
+      if (thumbnailBeingDeleted) {
+        await setGalleryThumbnailPhoto(selectedId, null)
+        patchGalleryThumbnailInList(selectedId, null)
       }
       exitSelectionMode()
       await refreshPhotos()
@@ -757,7 +806,9 @@ function GalleryAdminPage() {
           )}
 
           <div className="mt-6 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-            {galleries.map((g) => (
+            {galleries.map((g) => {
+              const sidebarThumbUrl = r2PhotoPreviewUrl(g.thumbnailPhoto)
+              return (
               <div
                 key={g.id}
                 className={`flex w-full items-stretch gap-0.5 rounded-lg border text-sm transition ${
@@ -769,14 +820,26 @@ function GalleryAdminPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedId(g.id)}
-                  className="flex min-w-0 flex-1 flex-col px-3 py-2 text-left cursor-pointer"
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 px-2 py-2 text-left"
                 >
-                  <span className="font-medium">{g.title || 'Untitled'}</span>
-                  <span className="mt-1 font-mono text-xs text-zinc-500">{g.id}</span>
-                  <span className="mt-1 text-xs text-zinc-400">
-                    {g.photoCount ? `${g.photoCount} photos` : 'No photos yet'} ·{' '}
-                    {formatBytes(galleryStorageTotalBytes(g.id))}
-                  </span>
+                  {sidebarThumbUrl ? (
+                    <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md bg-zinc-800">
+                      <img
+                        src={sidebarThumbUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                    </div>
+                  ) : null}
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium">{g.title || 'Untitled'}</span>
+                    <span className="mt-1 block font-mono text-xs text-zinc-500">{g.id}</span>
+                    <span className="mt-1 block text-xs text-zinc-400">
+                      {g.photoCount ? `${g.photoCount} photos` : 'No photos yet'} ·{' '}
+                      {formatBytes(galleryStorageTotalBytes(g.id))}
+                    </span>
+                  </div>
                 </button>
                 <button
                   type="button"
@@ -795,7 +858,8 @@ function GalleryAdminPage() {
                   <Trash2 className="mx-auto h-4 w-4" aria-hidden="true" />
                 </button>
               </div>
-            ))}
+              )
+            })}
             {galleries.length === 0 && (
               <p className="text-xs text-zinc-500">No galleries yet — create one below.</p>
             )}
@@ -1030,6 +1094,7 @@ function GalleryAdminPage() {
                       const thumbUrl = r2PhotoPreviewUrl(p) || fullUrl
                       const bytes = photoStorageBytes(p)
                       const isSelected = selectedPhotoIds.has(p.id)
+                      const isThumbnail = selected?.thumbnailPhotoId === p.id
                       return (
                         <li
                           key={p.id}
@@ -1084,15 +1149,45 @@ function GalleryAdminPage() {
                             </p>
                           </div>
                           {!selectionMode ? (
-                            <button
-                              type="button"
-                              className="mt-1 shrink-0 text-xs text-zinc-500 transition hover:text-red-300 cursor-pointer"
-                              onClick={() => onDeletePhoto(p.id)}
-                              disabled={busy}
-                              aria-label={`Delete ${p.filename}`}
-                            >
-                              <Trash2 className="h-4 w-4" aria-hidden="true" />
-                            </button>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <button
+                                type="button"
+                                className={`cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                  isThumbnail
+                                    ? 'text-amber-400 hover:text-amber-300'
+                                    : 'text-zinc-500 hover:text-amber-400'
+                                }`}
+                                onClick={(ev) => {
+                                  ev.stopPropagation()
+                                  onToggleThumbnailPhoto(p.id)
+                                }}
+                                disabled={busy}
+                                aria-pressed={isThumbnail}
+                                aria-label={
+                                  isThumbnail
+                                    ? `Remove ${p.filename} as gallery thumbnail`
+                                    : `Set ${p.filename} as gallery thumbnail`
+                                }
+                                title={isThumbnail ? 'Gallery thumbnail' : 'Set as gallery thumbnail'}
+                              >
+                                <Star
+                                  className={`h-4 w-4 ${isThumbnail ? 'fill-current' : ''}`}
+                                  aria-hidden="true"
+                                />
+                              </button>
+                              <button
+                                type="button"
+                                className="cursor-pointer text-zinc-500 transition hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                onClick={(ev) => {
+                                  ev.stopPropagation()
+                                  onDeletePhoto(p.id)
+                                }}
+                                disabled={busy}
+                                aria-label={`Delete ${p.filename}`}
+                              >
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                              </button>
+                            </div>
                           ) : null}
                         </li>
                       )

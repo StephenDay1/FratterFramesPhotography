@@ -172,7 +172,32 @@ exports.getGalleryPublicInfo = onCall(
     const title =
       typeof data.title === 'string' && data.title.trim() ? data.title.trim() : 'Untitled shoot'
 
-    return { title }
+    let thumbnailPhoto = null
+    const thumbnailPhotoId =
+      typeof data.thumbnailPhotoId === 'string' ? data.thumbnailPhotoId.trim() : ''
+    if (thumbnailPhotoId) {
+      const photoSnap = await admin
+        .firestore()
+        .doc(`galleries/${galleryId}/photos/${thumbnailPhotoId}`)
+        .get()
+      if (photoSnap.exists) {
+        const p = photoSnap.data() || {}
+        if (typeof p.r2Key === 'string' && p.r2Key.trim()) {
+          thumbnailPhoto = {
+            id: photoSnap.id,
+            r2Key: p.r2Key.trim(),
+            ...(typeof p.thumbR2Key === 'string' && p.thumbR2Key.trim()
+              ? { thumbR2Key: p.thumbR2Key.trim() }
+              : {}),
+            ...(typeof p.filename === 'string' && p.filename.trim()
+              ? { filename: p.filename.trim() }
+              : {}),
+          }
+        }
+      }
+    }
+
+    return { title, thumbnailPhoto }
   },
 )
 

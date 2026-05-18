@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
-  getGalleryTitleForView,
+  getGalleryViewInfo,
   issueGalleryDownloadTicket,
   listGalleryPhotos,
   startGalleryZipExport,
@@ -37,6 +37,9 @@ function persistDownloadedPhotoId(galleryId, photoId) {
 }
 
 const LIGHTBOX_MAX_VH = 0.85
+const HERO_MAX_BLUR_PX = 22
+/** How far up the bottom fade travels (in % of hero height) as the user scrolls. */
+const HERO_FADE_PULL_SCROLL_RANGE = 420
 
 const lightboxLayerClass =
   'absolute inset-0 h-full w-full rounded-lg object-contain shadow-2xl transition-opacity duration-150'
@@ -152,12 +155,30 @@ function LightboxPhoto({ photo, alt }) {
   )
 }
 
+function DownloadAllButton({ busy, busyLabel, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      aria-busy={busy}
+      className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white cursor-pointer shadow-lg transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60"
+    >
+      <Download className="h-4 w-4 shrink-0" aria-hidden />
+      {busy ? busyLabel || 'Working…' : 'Download all'}
+    </button>
+  )
+}
+
 function GalleryViewPage() {
   const { galleryId } = useParams()
   const [photos, setPhotos] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [galleryTitle, setGalleryTitle] = useState(null)
+  const [thumbnailPhoto, setThumbnailPhoto] = useState(null)
+  const [scrollY, setScrollY] = useState(0)
+  const [downloadPinned, setDownloadPinned] = useState(false)
   const [lightboxIndex, setLightboxIndex] = useState(null)
   const [downloadBusy, setDownloadBusy] = useState(false)
   const [downloadedPhotoIds, setDownloadedPhotoIds] = useState(() => loadDownloadedPhotoIds(galleryId))
@@ -168,6 +189,7 @@ function GalleryViewPage() {
   const [zipAllError, setZipAllError] = useState('')
 
   const galleryTitleRef = useRef(galleryTitle)
+  const downloadSlotRef = useRef(null)
   const zipJobUnsubRef = useRef(() => {})
   const zipSessionRef = useRef(0)
 
@@ -205,21 +227,25 @@ function GalleryViewPage() {
   useEffect(() => {
     let cancelled = false
     queueMicrotask(() => {
-      if (!cancelled) setGalleryTitle(null)
+      if (!cancelled) {
+        setGalleryTitle(null)
+        setThumbnailPhoto(null)
+      }
     })
     ;(async () => {
       setLoading(true)
       setError('')
-      const titlePromise = getGalleryTitleForView(galleryId)
+      const infoPromise = getGalleryViewInfo(galleryId)
       try {
         const rows = await listGalleryPhotos(galleryId)
         if (!cancelled) setPhotos(rows)
       } catch (err) {
         if (!cancelled) setError(err?.message || 'Could not load photos')
       } finally {
-        const title = await titlePromise
+        const info = await infoPromise
         if (!cancelled) {
-          setGalleryTitle(title)
+          setGalleryTitle(info.title)
+          setThumbnailPhoto(info.thumbnailPhoto)
           setLoading(false)
         }
       }
@@ -227,6 +253,27 @@ function GalleryViewPage() {
     return () => {
       cancelled = true
     }
+  }, [galleryId])
+
+  useEffect(() => {
+    const onScroll = () => {
+      setScrollY(window.scrollY)
+      const slot = downloadSlotRef.current
+      if (slot) {
+        setDownloadPinned(slot.getBoundingClientRect().top < 12)
+      }
+    }
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [galleryId, loading, error, photos.length])
+
+  useEffect(() => {
+    queueMicrotask(() => setDownloadPinned(false))
   }, [galleryId])
 
   useEffect(() => {
@@ -445,90 +492,155 @@ function GalleryViewPage() {
     }
   }, [galleryId, photos.length, zipAllBusy, downloadZipBlob])
 
+  const heroSrc = thumbnailPhoto
+    ? r2PublicUrl(thumbnailPhoto.r2Key) || r2PhotoPreviewUrl(thumbnailPhoto)
+    : ''
+  const hasHero = Boolean(heroSrc)
+  const heroBlurPx = hasHero ? Math.min(scrollY * 0.07, HERO_MAX_BLUR_PX) : 0
+  const heroFadePull = hasHero
+    ? Math.min(scrollY / HERO_FADE_PULL_SCROLL_RANGE, 1)
+    : 0
+  const heroFadeStartPct = 58 - heroFadePull * 50
+  const heroFadeMidPct = Math.min(92, heroFadeStartPct + 18 + heroFadePull * 12)
+  const heroFadeSolidPct = Math.min(98, heroFadeMidPct + 14 + heroFadePull * 8)
+  const heroGradient = hasHero
+    ? `linear-gradient(to bottom, rgba(0,0,0,0.28) 0%, transparent 14%, transparent ${heroFadeStartPct}%, rgba(0,0,0,0.5) ${heroFadeMidPct}%, rgba(0,0,0,0.88) ${heroFadeSolidPct}%, black 100%)`
+    : undefined
+
+  const showDownloadAll = !loading && !error && photos.length > 0
+
   return (
     <RequireGalleryAccess galleryId={galleryId}>
       <main className="min-h-screen bg-black text-white">
-        <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10">
-          <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <Link
-                to="/galleries"
-                className="text-sm font-medium tracking-wide text-zinc-300 transition hover:text-white"
-              >
-                ← Galleries hub
-              </Link>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-4xl">
-                {galleryTitle ?? 'Your Gallery'}
-              </h1>
-            </div>
-            {!loading && !error && photos.length > 0 && (
-              <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:items-end">
-                <button
-                  type="button"
-                  onClick={startZipAllDownload}
-                  disabled={zipAllBusy}
-                  aria-busy={zipAllBusy}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white cursor-pointer transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
-                >
-                  <Download className="h-4 w-4 shrink-0" aria-hidden />
-                  {zipAllBusy ? zipAllMessage || 'Working…' : 'Download all'}
-                </button>
-                {zipAllError && (
-                  <p className="max-w-md text-xs text-red-300 sm:text-right">{zipAllError}</p>
-                )}
+        {hasHero ? (
+          <div
+            className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
+            aria-hidden
+          >
+            <img
+              src={heroSrc}
+              alt=""
+              className="h-full w-full scale-105 object-cover object-top"
+              style={{ filter: `blur(${heroBlurPx}px)` }}
+            />
+            <div
+              className="absolute inset-0"
+              style={{ background: heroGradient }}
+            />
+          </div>
+        ) : null}
+
+        <div className="relative z-10">
+          <div className="mx-auto max-w-6xl px-4 md:px-6">
+            {hasHero ? (
+              <div className="flex min-h-[min(48vh,400px)] flex-col justify-end pb-2 pt-8 md:min-h-[min(72vh,640px)] md:pb-4 md:pt-10">
+                <h1 className="max-w-4xl text-3xl font-semibold tracking-tight text-white drop-shadow-[0_2px_24px_rgba(0,0,0,0.85)] md:text-5xl">
+                  {galleryTitle ?? 'Your Gallery'}
+                </h1>
+              </div>
+            ) : (
+              <div className="min-w-0 pb-2 pt-8 md:pt-10">
+                <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
+                  {galleryTitle ?? 'Your Gallery'}
+                </h1>
               </div>
             )}
           </div>
 
-          {loading && <p className="text-sm text-zinc-400">Loading gallery…</p>}
-          {error && (
-            <p className="rounded-lg border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-100">
-              {error}
-            </p>
-          )}
-
-          {!loading && !error && photos.length === 0 && (
-            <>
-              <p className="text-sm text-zinc-400">
-                No photo records yet. Your photographer still needs to upload photos to the gallery.
-              </p>
-              <p className="text-sm text-zinc-400">
-                If you think this is an error, please contact your photographer.
-              </p>
-            </>
-          )}
-
-          {!loading && !error && photos.length > 0 && (
-            <div className="columns-2 gap-3 sm:columns-4 lg:columns-6">
-              {photos.map((p, index) => {
-                const href = r2PublicUrl(p.r2Key)
-                const gridSrc = r2PhotoPreviewUrl(p) || href
-                const canOpen = Boolean(gridSrc || href)
-                return (
-                  <div key={p.id} className="mb-3 break-inside-avoid">
-                    {canOpen ? (
-                      <button
-                        type="button"
-                        onClick={() => setLightboxIndex(index)}
-                        className="w-full cursor-pointer overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 text-left outline-none ring-white/0 transition hover:border-zinc-600 focus-visible:ring-2 focus-visible:ring-white"
-                      >
-                        <img
-                          src={gridSrc || href}
-                          alt={p.filename || 'Photo'}
-                          loading="lazy"
-                          className="w-full object-cover transition duration-300 ease-out hover:scale-[1.02]"
-                        />
-                      </button>
-                    ) : (
-                      <div className="flex min-h-[120px] items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/40 p-3 text-center text-xs text-zinc-500">
-                        Set <span className="font-mono">VITE_R2_PUBLIC_BASE_URL</span> to preview
-                      </div>
+          <div className={hasHero ? 'bg-black/0' : ''}>
+            <div className="mx-auto max-w-6xl px-4 pb-10 md:px-6 md:pb-12">
+              <div className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+                <Link
+                  to="/galleries"
+                  className="text-sm font-medium tracking-wide text-zinc-200 transition hover:text-white"
+                >
+                  ← Galleries hub
+                </Link>
+                {showDownloadAll ? (
+                  <div
+                    ref={downloadSlotRef}
+                    className={`ml-auto flex flex-col items-end gap-2 ${downloadPinned ? 'invisible' : ''}`}
+                  >
+                    <DownloadAllButton
+                      busy={zipAllBusy}
+                      busyLabel={zipAllMessage}
+                      onClick={startZipAllDownload}
+                    />
+                    {zipAllError && (
+                      <p className="max-w-md text-right text-xs text-red-300">{zipAllError}</p>
                     )}
                   </div>
-                )
-              })}
+                ) : null}
+              </div>
+
+              {showDownloadAll && downloadPinned ? (
+                <div className="pointer-events-none fixed inset-x-0 top-0 z-30 pt-3 md:pt-4">
+                  <div className="pointer-events-auto mx-auto flex max-w-6xl justify-end px-4 md:px-6">
+                    <div className="flex flex-col items-end gap-2">
+                      <DownloadAllButton
+                        busy={zipAllBusy}
+                        busyLabel={zipAllMessage}
+                        onClick={startZipAllDownload}
+                      />
+                      {zipAllError && (
+                        <p className="max-w-md text-right text-xs text-red-300">{zipAllError}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {loading && <p className="text-sm text-zinc-400">Loading gallery…</p>}
+              {error && (
+                <p className="rounded-lg border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-100">
+                  {error}
+                </p>
+              )}
+
+              {!loading && !error && photos.length === 0 && (
+                <>
+                  <p className="text-sm text-zinc-400">
+                    No photo records yet. Your photographer still needs to upload photos to the gallery.
+                  </p>
+                  <p className="text-sm text-zinc-400">
+                    If you think this is an error, please contact your photographer.
+                  </p>
+                </>
+              )}
+
+              {!loading && !error && photos.length > 0 && (
+                <div className="columns-2 gap-3 sm:columns-4 lg:columns-6">
+                  {photos.map((p, index) => {
+                    const href = r2PublicUrl(p.r2Key)
+                    const gridSrc = r2PhotoPreviewUrl(p) || href
+                    const canOpen = Boolean(gridSrc || href)
+                    return (
+                      <div key={p.id} className="mb-3 break-inside-avoid">
+                        {canOpen ? (
+                          <button
+                            type="button"
+                            onClick={() => setLightboxIndex(index)}
+                            className="w-full cursor-pointer overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 text-left outline-none ring-white/0 transition hover:border-zinc-600 focus-visible:ring-2 focus-visible:ring-white"
+                          >
+                            <img
+                              src={gridSrc || href}
+                              alt={p.filename || 'Photo'}
+                              loading="lazy"
+                              className="w-full object-cover transition duration-300 ease-out hover:scale-[1.02]"
+                            />
+                          </button>
+                        ) : (
+                          <div className="flex min-h-[120px] items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/40 p-3 text-center text-xs text-zinc-500">
+                            Set <span className="font-mono">VITE_R2_PUBLIC_BASE_URL</span> to preview
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         {active && activeHasMedia && (

@@ -2,6 +2,7 @@ import {
   addDoc,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -10,6 +11,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  updateDoc,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { db, functions } from '../lib/firebase'
@@ -26,12 +28,25 @@ function sortByCreatedAtDesc(docs) {
  * Lists galleries visible to the signed-in user (owner galleries, or every gallery if the
  * account has custom claim admin: true — see Firestore rules).
  */
+export async function getGalleryPhoto(galleryId, photoDocId) {
+  if (!galleryId || !photoDocId) return null
+  const snap = await getDoc(doc(db, 'galleries', galleryId, 'photos', photoDocId))
+  if (!snap.exists()) return null
+  return { id: snap.id, ...snap.data() }
+}
+
 export async function listGalleries() {
   const snap = await getDocs(collection(db, 'galleries'))
   const rows = await Promise.all(
     snap.docs.map(async (d) => {
+      const data = d.data()
       const photosSnap = await getDocs(collection(db, 'galleries', d.id, 'photos'))
-      return { id: d.id, ...d.data(), photoCount: photosSnap.size }
+      const thumbnailPhotoId =
+        typeof data.thumbnailPhotoId === 'string' ? data.thumbnailPhotoId.trim() : ''
+      const thumbnailPhoto = thumbnailPhotoId
+        ? await getGalleryPhoto(d.id, thumbnailPhotoId)
+        : null
+      return { id: d.id, ...data, photoCount: photosSnap.size, thumbnailPhoto }
     }),
   )
   return sortByCreatedAtDesc(rows)
@@ -77,6 +92,16 @@ export async function deleteGalleryDocument(galleryId) {
   await deleteDoc(doc(db, 'galleries', galleryId))
 }
 
+/** Sets which photo is the gallery thumbnail (Firestore photo doc id), or clears it. */
+export async function setGalleryThumbnailPhoto(galleryId, photoDocId) {
+  const ref = doc(db, 'galleries', galleryId)
+  if (photoDocId) {
+    await updateDoc(ref, { thumbnailPhotoId: photoDocId })
+  } else {
+    await updateDoc(ref, { thumbnailPhotoId: deleteField() })
+  }
+}
+
 const GALLERY_TITLE_STORAGE_PREFIX = 'ffGalleryTitle:'
 
 export function setStoredGalleryTitle(galleryId, title) {
@@ -88,37 +113,66 @@ export function setStoredGalleryTitle(galleryId, title) {
   }
 }
 
-async function getGalleryTitleViaCallable(galleryId) {
-  const fn = httpsCallable(functions, 'getGalleryPublicInfo')
-  const result = await fn({ galleryId })
-  const title = result.data?.title
-  return typeof title === 'string' && title.trim() ? title.trim() : null
+function normalizeThumbnailPhoto(data) {
+  if (!data || typeof data.r2Key !== 'string' || !data.r2Key.trim()) return null
+  const row = {
+    id: typeof data.id === 'string' ? data.id : '',
+    r2Key: data.r2Key.trim(),
+    filename: typeof data.filename === 'string' ? data.filename : undefined,
+  }
+  if (typeof data.thumbR2Key === 'string' && data.thumbR2Key.trim()) {
+    row.thumbR2Key = data.thumbR2Key.trim()
+  }
+  return row
 }
 
-export async function getGalleryTitleForView(galleryId) {
-  if (!galleryId) return null
+async function getGalleryViewInfoViaCallable(galleryId) {
+  const fn = httpsCallable(functions, 'getGalleryPublicInfo')
+  const result = await fn({ galleryId })
+  const title =
+    typeof result.data?.title === 'string' && result.data.title.trim()
+      ? result.data.title.trim()
+      : null
+  const thumbnailPhoto = normalizeThumbnailPhoto(result.data?.thumbnailPhoto)
+  return { title, thumbnailPhoto }
+}
+
+/** Title and optional hero thumbnail for gallery view (owners + client viewers). */
+export async function getGalleryViewInfo(galleryId) {
+  if (!galleryId) return { title: null, thumbnailPhoto: null }
   try {
     const snap = await getDoc(doc(db, 'galleries', galleryId))
     if (snap.exists()) {
-      const title = snap.data()?.title
-      if (typeof title === 'string' && title.trim()) return title.trim()
+      const data = snap.data()
+      const title =
+        typeof data.title === 'string' && data.title.trim() ? data.title.trim() : null
+      const thumbnailPhotoId =
+        typeof data.thumbnailPhotoId === 'string' ? data.thumbnailPhotoId.trim() : ''
+      const thumbnailPhoto = thumbnailPhotoId
+        ? await getGalleryPhoto(galleryId, thumbnailPhotoId)
+        : null
+      return { title, thumbnailPhoto }
     }
   } catch {
     // expected for viewer tokens due to Firestore rules
   }
   try {
-    const callableTitle = await getGalleryTitleViaCallable(galleryId)
-    if (callableTitle) return callableTitle
+    return await getGalleryViewInfoViaCallable(galleryId)
   } catch {
     // callable may not be deployed yet
   }
   try {
     const stored = sessionStorage.getItem(GALLERY_TITLE_STORAGE_PREFIX + galleryId)
-    if (stored?.trim()) return stored.trim()
+    if (stored?.trim()) return { title: stored.trim(), thumbnailPhoto: null }
   } catch {
     // ignore storage errors
   }
-  return null
+  return { title: null, thumbnailPhoto: null }
+}
+
+export async function getGalleryTitleForView(galleryId) {
+  const { title } = await getGalleryViewInfo(galleryId)
+  return title
 }
 
 export async function verifyGalleryKeyCallable(galleryId, key) {
