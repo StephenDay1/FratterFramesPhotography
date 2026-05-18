@@ -834,7 +834,7 @@ function GalleryAdminPage() {
                   ) : null}
                   <div className="min-w-0 flex-1">
                     <span className="font-medium">{g.title || 'Untitled'}</span>
-                    <span className="mt-1 block font-mono text-xs text-zinc-500">{g.id}</span>
+                    {/* <span className="mt-1 block font-mono text-xs text-zinc-500">{g.id}</span> */}
                     <span className="mt-1 block text-xs text-zinc-400">
                       {g.photoCount ? `${g.photoCount} photos` : 'No photos yet'} ·{' '}
                       {formatBytes(galleryStorageTotalBytes(g.id))}
