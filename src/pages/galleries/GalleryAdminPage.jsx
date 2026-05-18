@@ -911,7 +911,6 @@ function GalleryAdminPage() {
                   <button
                     type="button"
                     className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
-                    onClick={onCopyShareLink}
                     aria-label="View gallery"
                     title="View gallery"
                   >
