@@ -4,7 +4,8 @@ compatibility_date = "2026-05-01"
 workers_dev = true
 
 # Public, non-secret config. Secrets are set with `wrangler secret put`:
-#   FIREBASE_WEB_API_KEY, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, GALLERY_DOWNLOAD_HMAC_SECRET
+#   FIREBASE_WEB_API_KEY, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+#   GALLERY_DOWNLOAD_HMAC_SECRET — optional; only for legacy GET /gallery-download
 [vars]
 ALLOWED_ADMIN_UIDS = "iYNJMQfQHsfBnv1l4F0anoP5we53,BgP9UDzVwShXi7VO1orcHvSJ5Fk2"
 ALLOWED_ORIGINS = "https://fratterframesphotography.web.app,https://fratterframesphotography.firebaseapp.com,http://localhost:5173"

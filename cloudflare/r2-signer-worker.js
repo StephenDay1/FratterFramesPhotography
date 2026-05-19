@@ -13,13 +13,13 @@
  *   FIREBASE_WEB_API_KEY           Firebase Web API key (used to verify ID tokens)
  *   R2_ACCESS_KEY_ID               R2 S3 API token, Object Read & Write
  *   R2_SECRET_ACCESS_KEY           R2 S3 API token secret
- *   GALLERY_DOWNLOAD_HMAC_SECRET   Same value as Firebase Functions GALLERY_DOWNLOAD_HMAC_SECRET
+ *   GALLERY_DOWNLOAD_HMAC_SECRET   (legacy) only if GET /gallery-download is still used
  *
  * Endpoints:
  *   POST /sign-upload       -> { uploadUrl, objectKey }   10-minute presigned PUT URL
  *   POST /delete-object     -> { deleted: true }          server-side DELETE
  *   POST /storage-usage     -> { totalBytes, totalPhotoBytes, totalExportBytes, byGallery, exportZipByGallery }
- *   GET  /gallery-download  -> binary stream              HMAC-signed URL from issueGalleryDownloadTicket
+ *   GET  /gallery-download  -> (legacy) proxied download; replaced by Firebase presigned GET URLs
  *
  * POST endpoints require: Authorization: Bearer <Firebase ID token> (admin only, except gallery-download ticket flow).
  */
@@ -42,6 +42,7 @@ function corsHeaders(env, origin) {
     'Access-Control-Allow-Origin': allow,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'authorization, content-type',
+    'Access-Control-Expose-Headers': 'Content-Length',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   }
@@ -362,15 +363,21 @@ async function handleGalleryDownload(request, env, origin) {
 
   const dispositionName = sanitizeSegment(filename)
   const contentType = r2Res.headers.get('Content-Type') || 'application/octet-stream'
+  const contentLength = r2Res.headers.get('Content-Length')
+
+  const headers = {
+    'Content-Type': contentType,
+    'Content-Disposition': `attachment; filename="${dispositionName.replace(/"/g, '')}"`,
+    'Cache-Control': 'private, no-store',
+    ...corsHeaders(env, origin),
+  }
+  if (contentLength) {
+    headers['Content-Length'] = contentLength
+  }
 
   return new Response(r2Res.body, {
     status: 200,
-    headers: {
-      'Content-Type': contentType,
-      'Content-Disposition': `attachment; filename="${dispositionName.replace(/"/g, '')}"`,
-      'Cache-Control': 'private, no-store',
-      ...corsHeaders(env, origin),
-    },
+    headers,
   })
 }
 

@@ -8,6 +8,7 @@ const {
   ListObjectsV2Command,
 } = require('@aws-sdk/client-s3')
 const { Upload } = require('@aws-sdk/lib-storage')
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner')
 const { PassThrough } = require('node:stream')
 const { finished } = require('node:stream/promises')
 const admin = require('firebase-admin')
@@ -37,6 +38,48 @@ function createR2S3Client(env) {
       secretAccessKey: env.secretAccessKey,
     },
   })
+}
+
+const PRESIGNED_GET_EXPIRES_SECONDS = 10 * 60
+
+function sanitizeGalleryDownloadFilename(filenameIn, objectKey) {
+  const base =
+    (filenameIn && String(filenameIn).trim()) ||
+    String(objectKey || '')
+      .split('/')
+      .filter(Boolean)
+      .pop() ||
+    'photo'
+  return (
+    String(base)
+      .split(/[/\\]/)
+      .pop()
+      .replace(/[^a-zA-Z0-9._\-\s()]+/g, '_')
+      .slice(0, 180) || 'photo'
+  )
+}
+
+/**
+ * Presigned GET URL for browser download straight from R2 (no Worker proxy).
+ * @param {string} objectKey
+ * @param {string} [filenameIn]
+ */
+async function createPresignedGalleryDownloadUrl(objectKey, filenameIn) {
+  const env = getR2Env()
+  if (!env) {
+    throw new Error(
+      'R2 is not configured on Functions (set R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)',
+    )
+  }
+  const safeName = sanitizeGalleryDownloadFilename(filenameIn, objectKey)
+  const disposition = `attachment; filename="${safeName.replace(/"/g, '')}"`
+  const s3 = createR2S3Client(env)
+  const command = new GetObjectCommand({
+    Bucket: env.bucket,
+    Key: objectKey,
+    ResponseContentDisposition: disposition,
+  })
+  return getSignedUrl(s3, command, { expiresIn: PRESIGNED_GET_EXPIRES_SECONDS })
 }
 
 function entryNameForPhoto(photo, index) {
@@ -185,7 +228,40 @@ async function loadPhotosForGallery(db, galleryId) {
   return rows
 }
 
-async function appendPhotosToArchive({ s3, bucket, photos, archive, galleryId, jobId, jobStartedAt }) {
+function shouldWriteZipJobProgress(index, total, lastWriteMs) {
+  if (index === 0 || index === total - 1) return true
+  if (total <= 25) return true
+  const step = Math.max(1, Math.floor(total / 30))
+  if ((index + 1) % step === 0) return true
+  return Date.now() - lastWriteMs >= 2000
+}
+
+async function writeZipJobProgress(jobRef, fields) {
+  try {
+    await jobRef.update(fields)
+  } catch (err) {
+    logger.warn('galleryZipJob progress update failed', { err: String(err) })
+  }
+}
+
+async function appendPhotosToArchive({
+  s3,
+  bucket,
+  photos,
+  archive,
+  galleryId,
+  jobId,
+  jobStartedAt,
+  jobRef,
+}) {
+  const total = photos.length
+  let lastProgressWrite = 0
+  await writeZipJobProgress(jobRef, {
+    totalCount: total,
+    processedCount: 0,
+    zipPhase: 'photos',
+  })
+
   const used = new Set()
   for (let i = 0; i < photos.length; i++) {
     const p = photos[i]
@@ -230,7 +306,23 @@ async function appendPhotosToArchive({ s3, bucket, photos, archive, galleryId, j
       contentLength: typeof contentLength === 'number' ? contentLength : undefined,
       elapsedSinceJobStartMs: Date.now() - jobStartedAt,
     })
+
+    const processed = i + 1
+    if (shouldWriteZipJobProgress(i, total, lastProgressWrite)) {
+      lastProgressWrite = Date.now()
+      await writeZipJobProgress(jobRef, {
+        processedCount: processed,
+        totalCount: total,
+        zipPhase: 'photos',
+      })
+    }
   }
+
+  await writeZipJobProgress(jobRef, {
+    processedCount: total,
+    totalCount: total,
+    zipPhase: 'finalizing',
+  })
 }
 
 /**
@@ -249,6 +341,7 @@ async function runGalleryZipJob(galleryId, jobId) {
   const s3 = createR2S3Client(env)
   const bucket = env.bucket
   const db = admin.firestore()
+  const jobRef = db.doc(`galleries/${galleryId}/zipJobs/${jobId}`)
   const photos = await loadPhotosForGallery(db, galleryId)
   if (!photos.length) {
     throw new Error('No photos with a valid r2Key found for this gallery')
@@ -300,6 +393,7 @@ async function runGalleryZipJob(galleryId, jobId) {
       galleryId,
       jobId,
       jobStartedAt,
+      jobRef,
     })
     logger.info('galleryZipJob finalize_start', {
       galleryId,
@@ -420,4 +514,5 @@ module.exports = {
   resolveGalleryZipExport,
   cleanupAllGalleryExportZips,
   isR2ZipExportConfigured,
+  createPresignedGalleryDownloadUrl,
 }

@@ -1,4 +1,4 @@
-const { randomUUID, createHmac } = require('crypto')
+const { randomUUID } = require('crypto')
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const { onDocumentCreated } = require('firebase-functions/v2/firestore')
 const { logger } = require('firebase-functions')
@@ -44,7 +44,16 @@ const {
   resolveGalleryZipExport,
   cleanupAllGalleryExportZips,
   isR2ZipExportConfigured,
+  createPresignedGalleryDownloadUrl,
 } = require('./galleryZipJob')
+
+/** Bound to Cloud Functions secrets so `firebase functions:secrets:set` values appear on `process.env`. */
+const R2_ZIP_EXPORT_SECRETS = [
+  'R2_ACCOUNT_ID',
+  'R2_BUCKET_NAME',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+]
 
 function tokenIsGalleryAdmin(token) {
   return token?.admin === true
@@ -201,7 +210,7 @@ exports.getGalleryPublicInfo = onCall(
   },
 )
 
-/** Short-lived signed URL for browser download (CORS-friendly proxy to R2). */
+/** Short-lived presigned GET URL so the browser downloads directly from R2. */
 exports.issueGalleryDownloadTicket = onCall(
   {
     region: 'us-central1',
@@ -209,6 +218,7 @@ exports.issueGalleryDownloadTicket = onCall(
     invoker: 'public',
     cors: true,
     ingressSettings: 'ALLOW_ALL',
+    secrets: R2_ZIP_EXPORT_SECRETS,
   },
   async (request) => {
     const galleryId =
@@ -252,55 +262,24 @@ exports.issueGalleryDownloadTicket = onCall(
       throw new HttpsError('permission-denied', 'Not allowed')
     }
 
-    const signerUrl = String(process.env.R2_SIGNER_URL || '').replace(/\/+$/, '')
-    const secret = String(process.env.GALLERY_DOWNLOAD_HMAC_SECRET || '')
-    if (!signerUrl || !secret) {
+    if (!isR2ZipExportConfigured()) {
       throw new HttpsError(
         'failed-precondition',
-        'Gallery downloads are not configured (set R2_SIGNER_URL and GALLERY_DOWNLOAD_HMAC_SECRET on Functions)',
+        'Gallery downloads are not configured (set R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY on Functions)',
       )
     }
 
-    const sanitizeFilename = (name) => {
-      const base =
-        (name && name.trim()) ||
-        objectKey
-          .split('/')
-          .filter(Boolean)
-          .pop() ||
-        'photo'
-      return (
-        String(base)
-          .split(/[/\\]/)
-          .pop()
-          .replace(/[^a-zA-Z0-9._\-\s()]+/g, '_')
-          .slice(0, 180) || 'photo'
-      )
+    let downloadUrl
+    try {
+      downloadUrl = await createPresignedGalleryDownloadUrl(objectKey, filenameIn)
+    } catch (err) {
+      logger.error('issueGalleryDownloadTicket presign failed', { galleryId, objectKey, err })
+      throw new HttpsError('internal', err?.message || 'Could not create download URL')
     }
 
-    const safeName = sanitizeFilename(filenameIn)
-    const exp = Date.now() + 5 * 60 * 1000
-    const sig = createHmac('sha256', secret)
-      .update(`${objectKey}\n${exp}\n${safeName}`)
-      .digest('base64url')
-
-    const q = new URLSearchParams({
-      objectKey,
-      exp: String(exp),
-      sig,
-      filename: safeName,
-    })
-    return { downloadUrl: `${signerUrl}/gallery-download?${q.toString()}` }
+    return { downloadUrl }
   },
 )
-
-/** Bound to Cloud Functions secrets so `firebase functions:secrets:set` values appear on `process.env`. */
-const R2_ZIP_EXPORT_SECRETS = [
-  'R2_ACCOUNT_ID',
-  'R2_BUCKET_NAME',
-  'R2_ACCESS_KEY_ID',
-  'R2_SECRET_ACCESS_KEY',
-]
 
 /**
  * Queues a server-side zip of all originals in the gallery. A Firestore trigger streams objects

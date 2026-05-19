@@ -182,8 +182,7 @@ export async function verifyGalleryKeyCallable(galleryId, key) {
 }
 
 /**
- * Returns a short-lived URL on the R2 signer worker that streams the object with CORS
- * (avoids browser fetch to public R2 without CORS).
+ * Returns a short-lived presigned GET URL for direct browser download from R2.
  */
 export async function issueGalleryDownloadTicket({ galleryId, objectKey, filename }) {
   const fn = httpsCallable(functions, 'issueGalleryDownloadTicket')
