@@ -14,6 +14,7 @@ import {
   deletePhotoRecord,
   listGalleryPhotos,
   listGalleries,
+  listGalleriesWithSelectedPhotos,
   setGalleryThumbnailPhoto,
 } from '../../services/galleryApi'
 import {
@@ -106,6 +107,8 @@ function GalleryAdminPage() {
   const [uploadProgress, setUploadProgress] = useState(null)
   /** Set only while bulk-deleting photos; drives the delete progress bar. */
   const [deleteProgress, setDeleteProgress] = useState(null)
+  /** Skips one selectedId effect run after initial hydrate loads photos in the same batch. */
+  const skipPhotosLoadForSelectedIdRef = useRef(false)
   const fileInputRef = useRef(null)
   const storageInfoRef = useRef(null)
 
@@ -212,13 +215,18 @@ function GalleryAdminPage() {
       setLoadError('')
       try {
         const rows = await listGalleries()
-        if (!cancelled) {
-          setGalleries(rows)
-          setSelectedId((prev) => {
-            if (prev && rows.some((r) => r.id === prev)) return prev
-            return rows[0]?.id ?? null
-          })
-        }
+        if (cancelled) return
+        const nextSelectedId =
+          selectedId && rows.some((r) => r.id === selectedId)
+            ? selectedId
+            : rows[0]?.id ?? null
+        const { galleries: hydrated, photos: photoRows } =
+          await listGalleriesWithSelectedPhotos(nextSelectedId, rows)
+        if (cancelled) return
+        skipPhotosLoadForSelectedIdRef.current = Boolean(nextSelectedId)
+        setGalleries(hydrated)
+        setSelectedId(nextSelectedId)
+        setPhotos(photoRows)
       } catch (err) {
         if (!cancelled) setLoadError(err?.message || 'Could not load galleries')
       }
@@ -226,6 +234,7 @@ function GalleryAdminPage() {
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-hydrate when auth changes, not on gallery switch
   }, [user, viewerBlocked])
 
   useEffect(() => {
@@ -235,6 +244,10 @@ function GalleryAdminPage() {
 
   useEffect(() => {
     if (!selectedId || viewerBlocked) return
+    if (skipPhotosLoadForSelectedIdRef.current) {
+      skipPhotosLoadForSelectedIdRef.current = false
+      return
+    }
     let cancelled = false
     ;(async () => {
       try {

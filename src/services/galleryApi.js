@@ -4,6 +4,7 @@ import {
   deleteDoc,
   deleteField,
   doc,
+  getCountFromServer,
   getDoc,
   getDocs,
   onSnapshot,
@@ -40,16 +41,38 @@ export async function listGalleries() {
   const rows = await Promise.all(
     snap.docs.map(async (d) => {
       const data = d.data()
-      const photosSnap = await getDocs(collection(db, 'galleries', d.id, 'photos'))
+      const photosColl = collection(db, 'galleries', d.id, 'photos')
+      const countSnap = await getCountFromServer(photosColl)
+      const photoCount = countSnap.data().count
       const thumbnailPhotoId =
         typeof data.thumbnailPhotoId === 'string' ? data.thumbnailPhotoId.trim() : ''
       const thumbnailPhoto = thumbnailPhotoId
         ? await getGalleryPhoto(d.id, thumbnailPhotoId)
         : null
-      return { id: d.id, ...data, photoCount: photosSnap.size, thumbnailPhoto }
+      return { id: d.id, ...data, photoCount, thumbnailPhoto }
     }),
   )
   return sortByCreatedAtDesc(rows)
+}
+
+/**
+ * Full photo list for one gallery; optionally reuses an existing listGalleries() result.
+ * @param {string | null} selectedGalleryId
+ * @param {Awaited<ReturnType<typeof listGalleries>> | null} [existingGalleries]
+ */
+export async function listGalleriesWithSelectedPhotos(
+  selectedGalleryId,
+  existingGalleries = null,
+) {
+  const galleries = existingGalleries ?? (await listGalleries())
+  if (!selectedGalleryId) {
+    return { galleries, photos: [] }
+  }
+  const photos = await listGalleryPhotos(selectedGalleryId)
+  const galleriesWithCount = galleries.map((g) =>
+    g.id === selectedGalleryId ? { ...g, photoCount: photos.length } : g,
+  )
+  return { galleries: galleriesWithCount, photos }
 }
 
 export async function createGallery({
