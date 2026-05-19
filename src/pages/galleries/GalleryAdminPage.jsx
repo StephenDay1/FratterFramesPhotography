@@ -2,7 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
-  CheckSquare, ChevronDown, Copy, CopyCheck, Info, Square, SquareArrowOutUpRight, Star, Trash2
+  CheckSquare,
+  Copy,
+  CopyCheck,
+  Info,
+  Square,
+  SquareArrowOutUpRight,
+  Star,
+  Trash2,
+  Upload,
+  CircleX,
 } from 'lucide-react'
 import { auth } from '../../lib/firebase'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
@@ -44,6 +53,68 @@ async function userIsGalleryViewer(user) {
 function truncateProgressLabel(text) {
   const value = String(text || '')
   return value.length > 40 ? `${value.slice(0, 37)}…` : value
+}
+
+const GALLERY_PHOTO_ACCEPT = 'image/*,.heic,.heif'
+
+function isGalleryPhotoFile(file) {
+  if (!file || !(file instanceof File)) return false
+  const type = String(file.type || '').toLowerCase()
+  if (type.startsWith('image/')) return true
+  const name = String(file.name || '').toLowerCase()
+  return /\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|avif)$/.test(name)
+}
+
+function filterGalleryPhotoFiles(files) {
+  return Array.from(files || []).filter(isGalleryPhotoFile)
+}
+
+async function readAllDirectoryEntries(directoryReader) {
+  const entries = []
+  let batch
+  do {
+    batch = await new Promise((resolve, reject) => {
+      directoryReader.readEntries(resolve, reject)
+    })
+    entries.push(...batch)
+  } while (batch.length > 0)
+  return entries
+}
+
+async function collectFilesFromEntry(entry) {
+  if (entry.isFile) {
+    const file = await new Promise((resolve, reject) => {
+      entry.file(resolve, reject)
+    })
+    return [file]
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader()
+    const entries = await readAllDirectoryEntries(reader)
+    const nested = await Promise.all(entries.map(collectFilesFromEntry))
+    return nested.flat()
+  }
+  return []
+}
+
+async function collectFilesFromDataTransfer(dataTransfer) {
+  const items = dataTransfer?.items
+  if (items?.length) {
+    const files = []
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.kind !== 'file') continue
+      const entry = item.webkitGetAsEntry?.()
+      if (entry) {
+        files.push(...(await collectFilesFromEntry(entry)))
+      } else {
+        const file = item.getAsFile()
+        if (file) files.push(file)
+      }
+    }
+    if (files.length) return files
+  }
+  return Array.from(dataTransfer?.files || [])
 }
 
 function OperationProgressBar({ progress, ariaLabelPrefix }) {
@@ -110,7 +181,9 @@ function GalleryAdminPage() {
   /** Skips one selectedId effect run after initial hydrate loads photos in the same batch. */
   const skipPhotosLoadForSelectedIdRef = useRef(false)
   const fileInputRef = useRef(null)
+  const uploadDragDepthRef = useRef(0)
   const storageInfoRef = useRef(null)
+  const [uploadDropActive, setUploadDropActive] = useState(false)
 
   const selected = useMemo(
     () => galleries.find((g) => g.id === selectedId) || null,
@@ -506,10 +579,20 @@ function GalleryAdminPage() {
     }
   }
 
-  const onRegisterFiles = async (e) => {
-    const files = e.target.files
-    if (!files?.length || !user || !selectedId) return
-    const fileList = Array.from(files)
+  const registerFiles = async (rawFiles, { resetInput } = {}) => {
+    const rawCount = rawFiles?.length ?? 0
+    const fileList = filterGalleryPhotoFiles(rawFiles)
+    if (!fileList.length) {
+      if (rawCount > 0) {
+        setLoadError(
+          'No supported image files found. Use JPEG, PNG, WebP, HEIC, or similar.',
+        )
+      }
+      if (resetInput) resetInput.value = ''
+      return
+    }
+    if (!user || !selectedId) return
+
     const uploadStartCount = photos.length
     const galleryTitle = selected?.title || 'gallery'
     const firstBasename = buildGalleryPhotoUploadBasename({
@@ -517,14 +600,12 @@ function GalleryAdminPage() {
       sequenceOneBased: uploadStartCount + 1,
       file: fileList[0],
     })
-    const firstLabel =
-      firstBasename.length > 40 ? `${firstBasename.slice(0, 37)}…` : firstBasename
     setBusy(true)
     setLoadError('')
     setUploadProgress({
       done: 0,
       total: fileList.length,
-      currentLabel: firstLabel,
+      currentLabel: truncateProgressLabel(firstBasename),
     })
     try {
       for (let i = 0; i < fileList.length; i++) {
@@ -534,8 +615,7 @@ function GalleryAdminPage() {
           sequenceOneBased: uploadStartCount + i + 1,
           file,
         })
-        const label =
-          displayBasename.length > 40 ? `${displayBasename.slice(0, 37)}…` : displayBasename
+        const label = truncateProgressLabel(displayBasename)
         setUploadProgress({ done: i, total: fileList.length, currentLabel: label })
         const expectedKey = defaultR2KeyForUpload(selectedId, displayBasename)
         const { objectKey: r2Key } = await uploadToR2WithPresign({
@@ -561,8 +641,59 @@ function GalleryAdminPage() {
     } finally {
       setBusy(false)
       setUploadProgress(null)
-      e.target.value = ''
+      if (resetInput) resetInput.value = ''
     }
+  }
+
+  const onRegisterFiles = async (e) => {
+    await registerFiles(e.target.files, { resetInput: e.target })
+  }
+
+  const openFilePicker = () => {
+    if (busy) return
+    fileInputRef.current?.click()
+  }
+
+  const handleUploadDragEnter = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (busy) return
+    uploadDragDepthRef.current += 1
+    if (uploadDragDepthRef.current === 1) setUploadDropActive(true)
+  }
+
+  const handleUploadDragOver = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (busy) return
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleUploadDragLeave = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    uploadDragDepthRef.current = Math.max(0, uploadDragDepthRef.current - 1)
+    if (uploadDragDepthRef.current === 0) setUploadDropActive(false)
+  }
+
+  const handleUploadDrop = async (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    uploadDragDepthRef.current = 0
+    setUploadDropActive(false)
+    if (busy || !user || !selectedId) return
+    try {
+      const dropped = await collectFilesFromDataTransfer(e.dataTransfer)
+      await registerFiles(dropped)
+    } catch (err) {
+      setLoadError(err?.message || 'Could not read dropped files')
+    }
+  }
+
+  const handleUploadZoneKeyDown = (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    openFilePicker()
   }
 
   const onBulkRegister = async (e) => {
@@ -705,6 +836,16 @@ function GalleryAdminPage() {
 
   return (
     <main className="h-screen overflow-hidden bg-black text-white">
+      {loadError && (
+        <div className="absolute top-0 right-0 z-50 m-4 flex items-center gap-2 rounded border border-red-900 bg-red-950 px-3 py-2 text-xs text-red-100">
+          <p className="text-xs text-red-100">
+            {loadError}
+          </p>
+          <button type="button" className="cursor-pointer text-xs font-medium text-red-100 transition hover:text-white" onClick={() => setLoadError('')}>
+            <CircleX className="h-4 w-4" />
+          </button>
+        </div>
+      )}
       <div className="mx-auto flex h-full min-h-0 w-full flex-col gap-8 overflow-hidden px-6 py-6 lg:flex-row">
         <aside className="flex min-h-0 w-full shrink-0 flex-col lg:w-72">
           <Link to="/galleries" className="text-sm text-zinc-400 transition hover:text-white">
@@ -787,12 +928,6 @@ function GalleryAdminPage() {
               </div>
             ) : null}
           </div>
-
-          {loadError && (
-            <p className="mt-4 rounded border border-red-900/50 bg-red-950/40 px-3 py-2 text-xs text-red-100">
-              {loadError}
-            </p>
-          )}
 
           <div className="mt-6 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {galleries.map((g) => {
@@ -922,26 +1057,57 @@ function GalleryAdminPage() {
                     ref={fileInputRef}
                     type="file"
                     multiple
+                    accept={GALLERY_PHOTO_ACCEPT}
                     className="sr-only"
                     onChange={onRegisterFiles}
                   />
                   <div className="mt-4">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={busy}
-                      className="inline-flex cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    <div
+                      role="button"
+                      tabIndex={busy ? -1 : 0}
+                      aria-disabled={busy || undefined}
+                      aria-label={
+                        busy && uploadProgress
+                          ? `Uploading ${uploadProgress.done} of ${uploadProgress.total} photos`
+                          : 'Upload photos: drag and drop here or choose files'
+                      }
+                      onClick={openFilePicker}
+                      onKeyDown={handleUploadZoneKeyDown}
+                      onDragEnter={handleUploadDragEnter}
+                      onDragOver={handleUploadDragOver}
+                      onDragLeave={handleUploadDragLeave}
+                      onDrop={handleUploadDrop}
+                      className={`flex min-h-[9.5rem] cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition ${
+                        busy
+                          ? 'cursor-not-allowed border-zinc-800 bg-zinc-950/60 opacity-60'
+                          : uploadDropActive
+                            ? 'border-zinc-300 bg-zinc-900/80'
+                            : 'border-zinc-700 bg-zinc-900/40 hover:border-zinc-500 hover:bg-zinc-900/70'
+                      }`}
                     >
-                      {busy && uploadProgress
-                        ? `Uploading ${uploadProgress.done}/${uploadProgress.total}…`
-                        : busy
-                          ? 'Uploading…'
-                          : 'Choose files…'}
-                    </button>
+                      <Upload
+                        className={`h-8 w-8 ${uploadDropActive && !busy ? 'text-zinc-200' : 'text-zinc-500'}`}
+                        aria-hidden
+                      />
+                      <p className="text-sm font-medium text-zinc-200">
+                        {busy && uploadProgress
+                          ? `Uploading ${uploadProgress.done}/${uploadProgress.total}…`
+                          : busy
+                            ? 'Uploading…'
+                            : uploadDropActive
+                              ? 'Drop photos to upload'
+                              : 'Drag photos here or click to browse'}
+                      </p>
+                      {!busy ? (
+                        <p className="max-w-xs text-xs text-zinc-500">
+                          JPEG, PNG, WebP, HEIC, and similar. Folders are supported when dropped.
+                        </p>
+                      ) : null}
+                    </div>
                     <OperationProgressBar progress={uploadProgress} ariaLabelPrefix="Upload progress" />
                   </div>
 
-                  <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-950/40">
+                  {/* <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-950/40">
                     <button
                       type="button"
                       aria-expanded={advancedUploadOpen}
@@ -1004,7 +1170,7 @@ function GalleryAdminPage() {
                         </form>
                       </div>
                     ) : null}
-                  </div>
+                  </div> */}
                 </div>
 
                 <div className="flex min-h-0 flex-col lg:h-full">
