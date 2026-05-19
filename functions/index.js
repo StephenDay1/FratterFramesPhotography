@@ -1,6 +1,6 @@
 const { randomUUID } = require('crypto')
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
-const { onDocumentCreated } = require('firebase-functions/v2/firestore')
+const { onDocumentCreated, onDocumentDeleted } = require('firebase-functions/v2/firestore')
 const { logger } = require('firebase-functions')
 const admin = require('firebase-admin')
 
@@ -395,6 +395,48 @@ exports.cleanupGalleryExportZips = onCall(
     } catch (err) {
       logger.error('cleanupGalleryExportZips failed', err)
       throw new HttpsError('internal', err?.message || 'Cleanup failed')
+    }
+  },
+)
+
+/** Recursively deletes a subcollection in batches (Firestore batch limit 500). */
+async function deleteFirestoreSubcollection(collectionRef, batchSize = 500) {
+  let deleted = 0
+  while (true) {
+    const snap = await collectionRef.limit(batchSize).get()
+    if (snap.empty) break
+    const batch = collectionRef.firestore.batch()
+    for (const doc of snap.docs) {
+      batch.delete(doc.ref)
+    }
+    await batch.commit()
+    deleted += snap.size
+    if (snap.size < batchSize) break
+  }
+  return deleted
+}
+
+/** When a gallery doc is removed, delete leftover subcollection docs (e.g. zipJobs). */
+exports.onGalleryDeleted = onDocumentDeleted(
+  {
+    document: 'galleries/{galleryId}',
+    region: 'us-central1',
+    ...(appspotServiceAccount ? { serviceAccount: appspotServiceAccount } : {}),
+  },
+  async (event) => {
+    const { galleryId } = event.params
+    const db = admin.firestore()
+    const galleryRef = db.collection('galleries').doc(galleryId)
+
+    const photosDeleted = await deleteFirestoreSubcollection(galleryRef.collection('photos'))
+    const zipJobsDeleted = await deleteFirestoreSubcollection(galleryRef.collection('zipJobs'))
+
+    if (photosDeleted || zipJobsDeleted) {
+      logger.info('onGalleryDeleted subcollection cleanup', {
+        galleryId,
+        photosDeleted,
+        zipJobsDeleted,
+      })
     }
   },
 )

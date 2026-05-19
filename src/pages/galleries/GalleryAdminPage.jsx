@@ -22,7 +22,12 @@ import {
   R2_FREE_STORAGE_GB_MONTH,
   R2_STANDARD_USD_PER_GB_MONTH,
 } from '../../lib/r2StorageEstimate'
-import { deleteFromR2, getR2StorageUsage, uploadToR2WithPresign } from '../../services/r2UploadApi'
+import {
+  deleteFromR2,
+  deleteGalleryObjectsFromR2,
+  getR2StorageUsage,
+  uploadToR2WithPresign,
+} from '../../services/r2UploadApi'
 import {
   buildGalleryPhotoUploadBasename,
   defaultR2KeyForUpload,
@@ -639,25 +644,16 @@ function GalleryAdminPage() {
     let r2DeleteWarning = ''
     try {
       const rows = await listGalleryPhotos(targetId)
+      try {
+        await deleteGalleryObjectsFromR2(targetId)
+      } catch (err) {
+        console.warn('R2 gallery delete failed; removing Firestore records anyway', err)
+        r2DeleteWarning =
+          'Gallery files could not be removed from R2; Firestore metadata was still removed. Be sure to visit https://dash.cloudflare.com/3fe7478227a6c725e93ebe2005240c23/r2/overview and delete anything left under galleries/' +
+          targetId +
+          '/'
+      }
       for (const p of rows) {
-        if (p.thumbR2Key) {
-          try {
-            await deleteFromR2(p.thumbR2Key)
-          } catch (err) {
-            console.warn('R2 thumb delete failed; removing Firestore record anyway', err)
-            r2DeleteWarning =
-              'One or more objects could not be removed from R2; Firestore metadata was still removed.  Be sure to visit https://dash.cloudflare.com/3fe7478227a6c725e93ebe2005240c23/r2/overview and make sure they are deleted.'
-          }
-        }
-        if (p.r2Key) {
-          try {
-            await deleteFromR2(p.r2Key)
-          } catch (err) {
-            console.warn('R2 delete failed; removing Firestore record anyway', err)
-            r2DeleteWarning =
-              'One or more objects could not be removed from R2; Firestore metadata was still removed.  Be sure to visit https://dash.cloudflare.com/3fe7478227a6c725e93ebe2005240c23/r2/overview and make sure they are deleted.'
-          }
-        }
         await deletePhotoRecord(targetId, p.id)
       }
       await deleteGalleryDocument(targetId)
@@ -1247,10 +1243,10 @@ function GalleryAdminPage() {
                     {deleteConfirmGallery.photoCount} photo
                     {deleteConfirmGallery.photoCount === 1 ? '' : 's'}
                   </span>
-                  {' '}contained in this gallery
                 </>
               ) : null}
-              .
+              , including any download-all zip and all other files stored for this gallery in
+              Cloudflare.
             </p>
             <p className="mt-2 font-mono text-xs text-zinc-500">{deleteConfirmGallery.id}</p>
             <div className="mt-6 flex flex-wrap justify-end gap-2">

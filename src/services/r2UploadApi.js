@@ -78,6 +78,30 @@ export async function deleteFromR2(objectKey) {
   }
 }
 
+/** Deletes every R2 object under galleries/{galleryId}/ (photos, thumbs, export zips). */
+export async function deleteGalleryObjectsFromR2(galleryId) {
+  const id = String(galleryId || '').trim()
+  if (!id) return { deletedCount: 0 }
+  const signerUrl = getSignerUrl()
+  const authHeader = await getAdminAuthHeader()
+
+  const res = await fetch(`${signerUrl}/delete-gallery`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: authHeader,
+    },
+    body: JSON.stringify({ galleryId: id }),
+  })
+
+  if (!res.ok) {
+    throw new Error(`Could not delete gallery from R2 (${res.status})`)
+  }
+
+  const data = await res.json()
+  return { deletedCount: Number(data?.deletedCount) || 0 }
+}
+
 export async function getR2StorageUsage() {
   const signerUrl = getSignerUrl()
   const authHeader = await getAdminAuthHeader()

@@ -17,6 +17,7 @@
  * Endpoints (all POST unless noted):
  *   /sign-upload       -> { uploadUrl, objectKey }   10-minute presigned PUT URL
  *   /delete-object     -> { deleted: true }          server-side DELETE
+ *   /delete-gallery    -> { deletedCount }           all objects under galleries/{id}/
  *   /storage-usage     -> { totalBytes, ... }        bucket usage for admin UI
  *
  * Gallery downloads use Firebase presigned GET URLs (issueGalleryDownloadTicket), not this worker.
@@ -64,6 +65,10 @@ function sanitizeSegment(value) {
     .pop()
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
     .slice(0, 180)
+}
+
+function isValidGalleryId(galleryId) {
+  return /^[a-zA-Z0-9_-]{1,128}$/.test(galleryId)
 }
 
 async function verifyFirebaseIdToken(idToken, firebaseApiKey) {
@@ -221,6 +226,83 @@ function parseListObjectsPage(xmlText) {
   return { objects, nextToken, isTruncated }
 }
 
+async function listObjectKeysWithPrefix(env, client, prefix) {
+  const keys = []
+  let continuationToken = ''
+
+  while (true) {
+    const listUrl = new URL(
+      `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${encodeURIComponent(env.R2_BUCKET_NAME)}`,
+    )
+    listUrl.searchParams.set('list-type', '2')
+    listUrl.searchParams.set('prefix', prefix)
+    listUrl.searchParams.set('max-keys', '1000')
+    if (continuationToken) {
+      listUrl.searchParams.set('continuation-token', continuationToken)
+    }
+
+    const signed = await client.sign(new Request(listUrl, { method: 'GET' }))
+    const listRes = await fetch(signed)
+    if (!listRes.ok) {
+      const detail = await listRes.text().catch(() => '')
+      throw new Error(`R2 list failed (${listRes.status}) ${detail}`.trim())
+    }
+
+    const xml = await listRes.text()
+    const page = parseListObjectsPage(xml)
+    for (const obj of page.objects) {
+      if (obj.key && obj.key.startsWith(prefix)) keys.push(obj.key)
+    }
+
+    if (!page.isTruncated || !page.nextToken) break
+    continuationToken = page.nextToken
+  }
+
+  return keys
+}
+
+async function deleteR2ObjectKey(client, env, objectKey) {
+  const signed = await client.sign(
+    new Request(r2ObjectUrl(env, objectKey), { method: 'DELETE' }),
+  )
+  const deleteRes = await fetch(signed)
+  if (deleteRes.status !== 204 && deleteRes.status !== 404) {
+    const detail = await deleteRes.text().catch(() => '')
+    throw new Error(`R2 delete failed (${deleteRes.status}) ${detail}`.trim())
+  }
+}
+
+async function handleDeleteGallery(request, env, origin) {
+  const authResult = await authenticate(request, env)
+  if (authResult.error) return json({ error: authResult.error }, authResult.status, env, origin)
+
+  const body = await request.json().catch(() => null)
+  const galleryId = String(body?.galleryId || '').trim()
+  if (!galleryId) return json({ error: 'galleryId is required' }, 400, env, origin)
+  if (!isValidGalleryId(galleryId)) return json({ error: 'Invalid galleryId' }, 400, env, origin)
+
+  const r2 = buildR2Client(env)
+  if (r2.error) return json({ error: r2.error }, r2.status, env, origin)
+
+  const prefix = `galleries/${galleryId}/`
+  try {
+    const keys = await listObjectKeysWithPrefix(env, r2.client, prefix)
+    let deletedCount = 0
+    for (const objectKey of keys) {
+      await deleteR2ObjectKey(r2.client, env, objectKey)
+      deletedCount += 1
+    }
+    return json({ deleted: true, deletedCount, galleryId }, 200, env, origin)
+  } catch (err) {
+    return json(
+      { error: err?.message || 'Could not delete gallery objects from R2' },
+      502,
+      env,
+      origin,
+    )
+  }
+}
+
 async function listAllBucketUsage(env, client) {
   let continuationToken = ''
   let totalBytes = 0
@@ -316,6 +398,10 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/delete-object') {
       return handleDeleteObject(request, env, origin)
+    }
+
+    if (request.method === 'POST' && url.pathname === '/delete-gallery') {
+      return handleDeleteGallery(request, env, origin)
     }
 
     if (request.method === 'POST' && url.pathname === '/storage-usage') {
