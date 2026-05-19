@@ -5,7 +5,6 @@ import {
   CheckSquare, ChevronDown, Copy, CopyCheck, Info, Square, SquareArrowOutUpRight, Star, Trash2
 } from 'lucide-react'
 import { auth } from '../../lib/firebase'
-import { generateJpegThumbnailBlob } from '../../lib/generateJpegThumbnail'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
   addPhotoRecord,
@@ -27,7 +26,6 @@ import { deleteFromR2, getR2StorageUsage, uploadToR2WithPresign } from '../../se
 import {
   buildGalleryPhotoUploadBasename,
   defaultR2KeyForUpload,
-  defaultThumbR2KeyForUpload,
   sanitizeObjectSegment,
 } from './galleryUtils'
 
@@ -522,33 +520,15 @@ function GalleryAdminPage() {
           displayBasename.length > 40 ? `${displayBasename.slice(0, 37)}…` : displayBasename
         setUploadProgress({ done: i, total: fileList.length, currentLabel: label })
         const expectedKey = defaultR2KeyForUpload(selectedId, displayBasename)
-        const thumbKey = defaultThumbR2KeyForUpload(selectedId, displayBasename)
         const { objectKey: r2Key } = await uploadToR2WithPresign({
           galleryId: selectedId,
           file,
           objectKey: expectedKey,
         })
-        let thumbR2Key = null
-        const thumbBlob = await generateJpegThumbnailBlob(file, { maxEdge: 960, quality: 0.82 })
-        if (thumbBlob && thumbBlob.size > 0) {
-          const thumbName = thumbKey.split('/').pop() || 'thumb.jpg'
-          const thumbFile = new File([thumbBlob], thumbName, { type: 'image/jpeg' })
-          try {
-            const { objectKey } = await uploadToR2WithPresign({
-              galleryId: selectedId,
-              file: thumbFile,
-              objectKey: thumbKey,
-            })
-            thumbR2Key = objectKey
-          } catch (thumbErr) {
-            console.warn('Thumbnail upload failed; saving full-size photo only', thumbErr)
-          }
-        }
         await addPhotoRecord({
           galleryId: selectedId,
           ownerUid: user.uid,
           r2Key,
-          thumbR2Key: thumbR2Key || undefined,
           filename: displayBasename,
         })
         setUploadProgress({

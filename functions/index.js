@@ -46,6 +46,7 @@ const {
   isR2ZipExportConfigured,
   createPresignedGalleryDownloadUrl,
 } = require('./galleryZipJob')
+const { runGalleryPhotoThumbnailJob } = require('./galleryThumbnail')
 
 /** Bound to Cloud Functions secrets so `firebase functions:secrets:set` values appear on `process.env`. */
 const R2_ZIP_EXPORT_SECRETS = [
@@ -394,6 +395,42 @@ exports.cleanupGalleryExportZips = onCall(
     } catch (err) {
       logger.error('cleanupGalleryExportZips failed', err)
       throw new HttpsError('internal', err?.message || 'Cleanup failed')
+    }
+  },
+)
+
+/** After a photo record is created, build a JPEG thumb in R2 and set thumbR2Key. */
+exports.onGalleryPhotoCreated = onDocumentCreated(
+  {
+    document: 'galleries/{galleryId}/photos/{photoId}',
+    region: 'us-central1',
+    timeoutSeconds: 120,
+    memory: '1GiB',
+    ...(appspotServiceAccount ? { serviceAccount: appspotServiceAccount } : {}),
+    secrets: R2_ZIP_EXPORT_SECRETS,
+  },
+  async (event) => {
+    const { galleryId, photoId } = event.params
+    const data = event.data?.data()
+    if (!data) return
+
+    const r2Key = typeof data.r2Key === 'string' ? data.r2Key.trim() : ''
+    if (!r2Key) return
+    if (typeof data.thumbR2Key === 'string' && data.thumbR2Key.trim()) return
+
+    const expectedPrefix = `galleries/${galleryId}/`
+    if (!r2Key.startsWith(expectedPrefix) || r2Key.includes('/thumbs/')) return
+
+    if (!isR2ZipExportConfigured()) {
+      logger.error('galleryThumbnail skipped: R2 not configured', { galleryId, photoId })
+      return
+    }
+
+    const db = admin.firestore()
+    try {
+      await runGalleryPhotoThumbnailJob(db, galleryId, photoId, r2Key)
+    } catch (err) {
+      logger.error('galleryThumbnail failed', { galleryId, photoId, r2Key, err: String(err) })
     }
   },
 )

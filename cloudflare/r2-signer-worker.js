@@ -13,15 +13,15 @@
  *   FIREBASE_WEB_API_KEY           Firebase Web API key (used to verify ID tokens)
  *   R2_ACCESS_KEY_ID               R2 S3 API token, Object Read & Write
  *   R2_SECRET_ACCESS_KEY           R2 S3 API token secret
- *   GALLERY_DOWNLOAD_HMAC_SECRET   (legacy) only if GET /gallery-download is still used
  *
- * Endpoints:
- *   POST /sign-upload       -> { uploadUrl, objectKey }   10-minute presigned PUT URL
- *   POST /delete-object     -> { deleted: true }          server-side DELETE
- *   POST /storage-usage     -> { totalBytes, totalPhotoBytes, totalExportBytes, byGallery, exportZipByGallery }
- *   GET  /gallery-download  -> (legacy) proxied download; replaced by Firebase presigned GET URLs
+ * Endpoints (all POST unless noted):
+ *   /sign-upload       -> { uploadUrl, objectKey }   10-minute presigned PUT URL
+ *   /delete-object     -> { deleted: true }          server-side DELETE
+ *   /storage-usage     -> { totalBytes, ... }        bucket usage for admin UI
  *
- * POST endpoints require: Authorization: Bearer <Firebase ID token> (admin only, except gallery-download ticket flow).
+ * Gallery downloads use Firebase presigned GET URLs (issueGalleryDownloadTicket), not this worker.
+ *
+ * POST endpoints require: Authorization: Bearer <Firebase ID token> (admin only).
  */
 
 import { AwsClient } from 'aws4fetch'
@@ -40,7 +40,7 @@ function corsHeaders(env, origin) {
   const allow = allowed.includes(origin) ? origin : allowed[0] || ''
   return {
     'Access-Control-Allow-Origin': allow,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'authorization, content-type',
     'Access-Control-Expose-Headers': 'Content-Length',
     'Access-Control-Max-Age': '86400',
@@ -301,86 +301,6 @@ async function handleStorageUsage(request, env, origin) {
   }
 }
 
-async function hmacSha256Base64Url(secret, message) {
-  const enc = new TextEncoder()
-  const key = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const sigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(message))
-  const bytes = new Uint8Array(sigBuf)
-  let bin = ''
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-function timingSafeEqualStr(a, b) {
-  if (a.length !== b.length) return false
-  let x = 0
-  for (let i = 0; i < a.length; i++) x |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return x === 0
-}
-
-async function handleGalleryDownload(request, env, origin) {
-  const url = new URL(request.url)
-  const objectKey = String(url.searchParams.get('objectKey') || '').trim()
-  const exp = Number(url.searchParams.get('exp'))
-  const sig = String(url.searchParams.get('sig') || '')
-  const filename = String(url.searchParams.get('filename') || '').trim() || 'photo'
-
-  if (!objectKey) return json({ error: 'objectKey is required' }, 400, env, origin)
-  if (!Number.isFinite(exp)) return json({ error: 'exp is required' }, 400, env, origin)
-  if (!sig) return json({ error: 'sig is required' }, 400, env, origin)
-
-  const now = Date.now()
-  if (now > exp + 60_000) return json({ error: 'Link expired' }, 403, env, origin)
-  if (exp > now + 10 * 60_000) return json({ error: 'Invalid exp' }, 400, env, origin)
-
-  const secret = env.GALLERY_DOWNLOAD_HMAC_SECRET
-  if (!secret) return json({ error: 'Gallery downloads are not configured' }, 503, env, origin)
-
-  const payload = `${objectKey}\n${exp}\n${filename}`
-  const expected = await hmacSha256Base64Url(secret, payload)
-  if (!timingSafeEqualStr(expected, sig)) {
-    return json({ error: 'Invalid signature' }, 403, env, origin)
-  }
-
-  if (!objectKey.startsWith('galleries/')) {
-    return json({ error: 'Invalid object key' }, 400, env, origin)
-  }
-
-  const r2 = buildR2Client(env)
-  if (r2.error) return json({ error: r2.error }, r2.status, env, origin)
-
-  const signed = await r2.client.sign(new Request(r2ObjectUrl(env, objectKey), { method: 'GET' }))
-  const r2Res = await fetch(signed)
-  if (!r2Res.ok) {
-    return json({ error: `R2 fetch failed (${r2Res.status})` }, 502, env, origin)
-  }
-
-  const dispositionName = sanitizeSegment(filename)
-  const contentType = r2Res.headers.get('Content-Type') || 'application/octet-stream'
-  const contentLength = r2Res.headers.get('Content-Length')
-
-  const headers = {
-    'Content-Type': contentType,
-    'Content-Disposition': `attachment; filename="${dispositionName.replace(/"/g, '')}"`,
-    'Cache-Control': 'private, no-store',
-    ...corsHeaders(env, origin),
-  }
-  if (contentLength) {
-    headers['Content-Length'] = contentLength
-  }
-
-  return new Response(r2Res.body, {
-    status: 200,
-    headers,
-  })
-}
-
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('origin') || ''
@@ -400,10 +320,6 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/storage-usage') {
       return handleStorageUsage(request, env, origin)
-    }
-
-    if (request.method === 'GET' && url.pathname === '/gallery-download') {
-      return handleGalleryDownload(request, env, origin)
     }
 
     return json({ error: 'Not found' }, 404, env, origin)
