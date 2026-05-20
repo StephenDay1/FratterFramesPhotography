@@ -20,7 +20,7 @@
  *   /delete-gallery    -> { deletedCount }           all objects under galleries/{id}/
  *   /storage-usage     -> { totalBytes, ... }        bucket usage for admin UI
  *
- * Gallery downloads use Firebase presigned GET URLs (issueGalleryDownloadTicket), not this worker.
+ * Gallery downloads (single photo and download-all zip) use Firebase presigned GET URLs.
  *
  * POST endpoints require: Authorization: Bearer <Firebase ID token> (admin only).
  */

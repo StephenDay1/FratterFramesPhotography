@@ -1,7 +1,7 @@
 const { GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3')
 const sharp = require('sharp')
 const { logger } = require('firebase-functions')
-const { getR2Env, createR2S3Client } = require('./galleryZipJob')
+const { getR2Env, createR2S3Client } = require('./galleryR2')
 
 const THUMB_MAX_EDGE = 960
 const THUMB_JPEG_QUALITY = 82

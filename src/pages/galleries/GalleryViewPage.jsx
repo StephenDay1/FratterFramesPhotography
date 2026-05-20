@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
+import {
+  downloadGalleryFolder,
+  formatDownloadBytes,
+  supportsFolderDownload,
+} from '../../lib/downloadGalleryFolder'
+import { downloadGalleryZip } from '../../lib/downloadGalleryZip'
+import { sanitizeTitleSegment } from '../../lib/downloadGalleryShared'
 import { triggerPresignedBrowserDownload } from '../../lib/triggerPresignedDownload'
 import {
   getGalleryViewInfo,
   issueGalleryDownloadTicket,
   listGalleryPhotos,
-  startGalleryZipExport,
-  subscribeGalleryZipJob,
 } from '../../services/galleryApi'
 import RequireGalleryAccess from './RequireGalleryAccess'
-import { ChevronLeft, ChevronRight, Download } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FolderDown } from 'lucide-react'
 
 const LS_DOWNLOADED_PHOTO_IDS = 'ffGalleryDownloadedIds:'
 
@@ -156,49 +161,29 @@ function LightboxPhoto({ photo, alt }) {
   )
 }
 
-/** @param {{ phase: 'photos' | 'finalizing' | 'download', done: number, total: number }} progress */
-function zipProgressLabel(progress) {
-  const { phase } = progress
-  if (phase === 'finalizing') return 'Finalizing zip…'
-  if (phase === 'download') return 'Starting download…'
-  return 'Zipping photos'
-}
-
-/** @param {{ phase: 'photos' | 'finalizing' | 'download', done: number, total: number }} progress */
-function zipProgressCount(progress) {
-  const { phase, done, total } = progress
-  if (phase === 'download') return ''
-  if (total > 0) return `${Math.min(done, total)}/${total}`
-  return ''
-}
-
-function ZipAllProgressBar({ progress }) {
-  if (!progress?.total && progress?.phase !== 'download') return null
-  const label = zipProgressLabel(progress)
-  const count = zipProgressCount(progress)
-  const hasTotal = progress.total > 0
-  const widthPct = hasTotal ? Math.min(100, (100 * progress.done) / progress.total) : null
+/** @param {{ phase: string, done?: number, total?: number, message?: string }} progress */
+function BulkDownloadProgressBar({ progress }) {
+  if (!progress) return null
+  const { phase, done = 0, total = 0, message } = progress
+  const label = message || 'Downloading…'
+  const hasRatio = phase === 'download' && total > 0
+  const pct = hasRatio ? Math.min(100, Math.round((done / total) * 100)) : null
 
   return (
     <div
       className="w-full min-w-[12rem] max-w-xs"
       role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={hasTotal ? progress.total : undefined}
-      aria-valuenow={progress.done}
+      aria-valuenow={pct ?? undefined}
+      aria-valuemin={hasRatio ? 0 : undefined}
+      aria-valuemax={hasRatio ? 100 : undefined}
       aria-label={label}
     >
-      <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-zinc-400">
-        <span className="min-w-0 truncate">{label}</span>
-        {count ? (
-          <span className="shrink-0 font-mono tabular-nums text-zinc-300">{count}</span>
-        ) : null}
-      </div>
+      <div className="mb-1 text-[10px] text-zinc-400">{label}</div>
       <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-        {widthPct !== null ? (
+        {pct != null ? (
           <div
-            className="h-full rounded-full bg-zinc-300 transition-[width] duration-200 ease-out"
-            style={{ width: `${widthPct}%` }}
+            className="h-full rounded-full bg-zinc-300 transition-[width] duration-200"
+            style={{ width: `${Math.max(pct, 4)}%` }}
           />
         ) : (
           <div className="h-full w-1/3 animate-pulse rounded-full bg-zinc-400" />
@@ -208,28 +193,50 @@ function ZipAllProgressBar({ progress }) {
   )
 }
 
-function DownloadAllButton({ busy, busyLabel, onClick }) {
+function DownloadAllControls({
+  busy,
+  busyLabel,
+  onFolderClick,
+  onZipClick,
+  folderAvailable,
+  progress,
+  error,
+}) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={busy}
-      aria-busy={busy}
-      className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white cursor-pointer shadow-lg transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60"
-    >
-      <Download className="h-4 w-4 shrink-0" aria-hidden />
-      {busy ? busyLabel || 'Working…' : 'Download all'}
-    </button>
-  )
-}
-
-function ZipDownloadAllControls({ busy, busyLabel, onClick, progress, error }) {
-  return (
-  <>
-    <DownloadAllButton busy={busy} busyLabel={busyLabel} onClick={onClick} />
-    {progress ? <ZipAllProgressBar progress={progress} /> : null}
-    {error ? <p className="max-w-md text-right text-xs text-red-300">{error}</p> : null}
-  </>
+    <div className="flex max-w-sm flex-col items-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onZipClick}
+          disabled={busy}
+          aria-busy={busy}
+          className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-600 bg-zinc-900 px-4 py-2 text-sm font-medium text-white cursor-pointer shadow-lg transition hover:border-zinc-400 hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60"
+        >
+          <Download className="h-4 w-4 shrink-0" aria-hidden />
+          {busy ? busyLabel || 'Working…' : 'Download all'}
+        </button>
+        {folderAvailable ? (
+          <button
+            type="button"
+            onClick={onFolderClick}
+            disabled={busy}
+            aria-busy={busy}
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-950/80 px-4 py-2 text-sm font-medium text-zinc-200 cursor-pointer shadow-lg transition hover:border-zinc-500 hover:bg-zinc-900 hover:text-white disabled:cursor-wait disabled:opacity-60"
+          >
+            <FolderDown className="h-4 w-4 shrink-0" aria-hidden />
+            {busy ? busyLabel || 'Working…' : 'Save as folder (faster)'}
+          </button>
+        ) : null}
+      </div>
+      {folderAvailable && !busy ? (
+        <p className="max-w-xs text-right text-[10px] leading-snug text-zinc-500">
+          Download all saves one ZIP file (usual save dialog). Folder download is faster but needs a
+          save location once.
+        </p>
+      ) : null}
+      {progress ? <BulkDownloadProgressBar progress={progress} /> : null}
+      {error ? <p className="max-w-md text-right text-xs text-red-300">{error}</p> : null}
+    </div>
   )
 }
 
@@ -247,29 +254,27 @@ function GalleryViewPage() {
   const [downloadedPhotoIds, setDownloadedPhotoIds] = useState(() => loadDownloadedPhotoIds(galleryId))
   const [downloadBtnPointerOver, setDownloadBtnPointerOver] = useState(false)
   const [downloadBtnFocused, setDownloadBtnFocused] = useState(false)
-  const [zipAllBusy, setZipAllBusy] = useState(false)
-  const [zipAllMessage, setZipAllMessage] = useState('')
-  const [zipAllError, setZipAllError] = useState('')
-  const [zipAllProgress, setZipAllProgress] = useState(null)
+  const [bulkDownloadBusy, setBulkDownloadBusy] = useState(false)
+  const [bulkDownloadMessage, setBulkDownloadMessage] = useState('')
+  const [bulkDownloadError, setBulkDownloadError] = useState('')
+  const [bulkDownloadProgress, setBulkDownloadProgress] = useState(null)
 
   const galleryTitleRef = useRef(galleryTitle)
   const downloadSlotRef = useRef(null)
-  const zipJobUnsubRef = useRef(() => {})
-  const zipSessionRef = useRef(0)
+  const bulkDownloadSessionRef = useRef(0)
+  const folderDownloadAvailable = supportsFolderDownload()
 
   useEffect(() => {
     galleryTitleRef.current = galleryTitle
   }, [galleryTitle])
 
   useEffect(() => {
-    zipSessionRef.current += 1
-    zipJobUnsubRef.current()
-    zipJobUnsubRef.current = () => {}
+    bulkDownloadSessionRef.current += 1
     queueMicrotask(() => {
-      setZipAllBusy(false)
-      setZipAllMessage('')
-      setZipAllError('')
-      setZipAllProgress(null)
+      setBulkDownloadBusy(false)
+      setBulkDownloadMessage('')
+      setBulkDownloadError('')
+      setBulkDownloadProgress(null)
     })
   }, [galleryId])
 
@@ -432,139 +437,101 @@ function GalleryViewPage() {
     }
   }, [active, galleryId])
 
-  const downloadZipViaPresign = useCallback(
-    async (zipR2Key, zipFilename) => {
-      const downloadUrl = await issueGalleryDownloadTicket({
-        galleryId,
-        objectKey: zipR2Key,
-        filename: zipFilename,
-      })
-      triggerPresignedBrowserDownload(downloadUrl)
-    },
-    [galleryId],
-  )
-
-  const applyZipJobProgress = useCallback(
-    (data) => {
-      const total =
-        typeof data.totalCount === 'number' && data.totalCount > 0
-          ? data.totalCount
-          : photos.length
-      const done =
-        typeof data.processedCount === 'number'
-          ? Math.min(Math.max(0, data.processedCount), total)
-          : 0
-      if (data.zipPhase === 'finalizing') {
-        setZipAllProgress({ phase: 'finalizing', done: total, total })
-        setZipAllMessage('Finalizing zip…')
-        return
-      }
-      setZipAllProgress({ phase: 'photos', done, total })
-      setZipAllMessage(done > 0 ? `Zipping ${done}/${total}…` : 'Building zip on server…')
-    },
-    [photos.length],
-  )
-
-  const startZipAllDownload = useCallback(async () => {
-    if (!galleryId || zipAllBusy || photos.length === 0) return
-    const session = zipSessionRef.current
-    const photoTotal = photos.length
-    setZipAllBusy(true)
-    setZipAllError('')
-    setZipAllMessage('Starting…')
-    setZipAllProgress(null)
-    zipJobUnsubRef.current()
-    zipJobUnsubRef.current = () => {}
-
-    const beginZipDownload = (zipR2Key) => {
-      const titleBase = (galleryTitleRef.current && galleryTitleRef.current.trim()) || 'gallery'
-      const zipFilename = `${titleBase.replace(/[/\\?%*:|"<>]/g, '-').slice(0, 80) || 'gallery'}.zip`
-      setZipAllProgress({ phase: 'download', done: 0, total: 0 })
-      setZipAllMessage('Starting download…')
-      void (async () => {
-        try {
-          if (session !== zipSessionRef.current) return
-          await downloadZipViaPresign(zipR2Key, zipFilename)
-          if (session !== zipSessionRef.current) return
-          setZipAllMessage('')
-        } catch (e) {
-          if (session !== zipSessionRef.current) return
-          setZipAllError(e?.message || 'Download failed')
-        } finally {
-          if (session === zipSessionRef.current) {
-            setZipAllBusy(false)
-            setZipAllMessage('')
-            setZipAllProgress(null)
-          }
-        }
-      })()
+  const applyBulkProgress = useCallback((session, mode, info) => {
+    if (session !== bulkDownloadSessionRef.current) return
+    const { phase, done = 0, total = 0, bytes = 0, folderLabel } = info
+    let message = ''
+    if (phase === 'pick') {
+      message =
+        mode === 'zip'
+          ? 'Choose where to save your ZIP file…'
+          : 'Choose where to save (Downloads recommended)…'
+    } else if (phase === 'download') {
+      const parts = []
+      if (total > 0) parts.push(`${done}/${total} photos`)
+      if (bytes > 0) parts.push(formatDownloadBytes(bytes))
+      message =
+        mode === 'zip' && done >= total && total > 0
+          ? ['Saving ZIP', parts[1]].filter(Boolean).join(' · ')
+          : parts.length
+            ? `Downloading · ${parts.join(' · ')}`
+            : 'Downloading…'
+    } else if (phase === 'done') {
+      message =
+        mode === 'zip'
+          ? 'ZIP saved'
+          : folderLabel
+            ? `Saved to folder “${folderLabel}”`
+            : 'Download complete'
     }
+    setBulkDownloadMessage(message)
+    setBulkDownloadProgress({
+      phase,
+      done,
+      total,
+      message,
+      mode,
+      folderLabel,
+    })
+  }, [])
 
-    try {
-      const { jobId, reused } = await startGalleryZipExport(galleryId)
-      if (session !== zipSessionRef.current) {
-        setZipAllBusy(false)
-        setZipAllMessage('')
-        setZipAllProgress(null)
-        return
-      }
-      if (reused) {
-        setZipAllMessage('Using saved gallery zip…')
-      } else {
-        setZipAllProgress({ phase: 'photos', done: 0, total: photoTotal })
-        setZipAllMessage('Building zip on server…')
-      }
+  const startBulkDownload = useCallback(
+    async (mode) => {
+      if (!galleryId || bulkDownloadBusy || photos.length === 0) return
+      const session = bulkDownloadSessionRef.current
+      const title = galleryTitleRef.current
 
-      const unsub = subscribeGalleryZipJob(
-        galleryId,
-        jobId,
-        (data) => {
-          if (session !== zipSessionRef.current) return
-          if (!data) return
-          if (data.status === 'failed') {
-            zipJobUnsubRef.current()
-            zipJobUnsubRef.current = () => {}
-            setZipAllError(typeof data.error === 'string' ? data.error : 'Zip failed')
-            setZipAllBusy(false)
-            setZipAllMessage('')
-            setZipAllProgress(null)
-            return
-          }
-          if (data.status === 'processing' || data.status === 'queued') {
-            if (data.status === 'queued') {
-              setZipAllProgress({ phase: 'photos', done: 0, total: photoTotal })
-              setZipAllMessage('Building zip on server…')
-            } else {
-              applyZipJobProgress(data)
-            }
-            return
-          }
-          if (data.status === 'ready' && typeof data.zipR2Key === 'string' && data.zipR2Key) {
-            zipJobUnsubRef.current()
-            zipJobUnsubRef.current = () => {}
-            beginZipDownload(data.zipR2Key)
-          }
-        },
-        () => {
-          if (session !== zipSessionRef.current) return
-          zipJobUnsubRef.current()
-          zipJobUnsubRef.current = () => {}
-          setZipAllError('Could not read zip job status')
-          setZipAllBusy(false)
-          setZipAllMessage('')
-          setZipAllProgress(null)
-        },
+      setBulkDownloadBusy(true)
+      setBulkDownloadError('')
+      setBulkDownloadMessage(
+        mode === 'zip' ? 'Choose where to save your ZIP file…' : 'Choose where to save…',
       )
-      zipJobUnsubRef.current = unsub
-    } catch (e) {
-      if (session === zipSessionRef.current) {
-        setZipAllError(e?.message || 'Could not start zip export')
-        setZipAllBusy(false)
-        setZipAllMessage('')
-        setZipAllProgress(null)
+      setBulkDownloadProgress({
+        phase: 'pick',
+        mode,
+        message:
+          mode === 'zip'
+            ? 'Choose where to save your ZIP file…'
+            : 'Choose where to save (Downloads recommended)…',
+      })
+
+      try {
+        if (mode === 'folder') {
+          await downloadGalleryFolder({
+            galleryId,
+            photos,
+            galleryTitle: title,
+            onProgress: (info) => applyBulkProgress(session, 'folder', info),
+          })
+        } else {
+          const zipFilename = `${sanitizeTitleSegment(title)}.zip`
+          await downloadGalleryZip({
+            galleryId,
+            photos,
+            zipFilename,
+            onProgress: (info) => applyBulkProgress(session, 'zip', info),
+          })
+        }
+      } catch (e) {
+        if (session === bulkDownloadSessionRef.current) {
+          setBulkDownloadError(e?.message || 'Could not download gallery')
+        }
+      } finally {
+        if (session === bulkDownloadSessionRef.current) {
+          setBulkDownloadBusy(false)
+          setBulkDownloadMessage('')
+          setBulkDownloadProgress(null)
+        }
       }
-    }
-  }, [galleryId, photos.length, zipAllBusy, downloadZipViaPresign, applyZipJobProgress])
+    },
+    [galleryId, photos, bulkDownloadBusy, applyBulkProgress],
+  )
+
+  const startFolderDownload = useCallback(
+    () => startBulkDownload('folder'),
+    [startBulkDownload],
+  )
+  const startZipDownload = useCallback(() => startBulkDownload('zip'), [startBulkDownload])
 
   const heroSrc = thumbnailPhoto
     ? r2PublicUrl(thumbnailPhoto.r2Key) || r2PhotoPreviewUrl(thumbnailPhoto)
@@ -635,12 +602,14 @@ function GalleryViewPage() {
                     ref={downloadSlotRef}
                     className={`ml-auto flex flex-col items-end gap-2 ${downloadPinned ? 'invisible' : ''}`}
                   >
-                    <ZipDownloadAllControls
-                      busy={zipAllBusy}
-                      busyLabel={zipAllMessage}
-                      onClick={startZipAllDownload}
-                      progress={zipAllProgress}
-                      error={zipAllError}
+                    <DownloadAllControls
+                      busy={bulkDownloadBusy}
+                      busyLabel={bulkDownloadMessage}
+                      onFolderClick={startFolderDownload}
+                      onZipClick={startZipDownload}
+                      folderAvailable={folderDownloadAvailable}
+                      progress={bulkDownloadProgress}
+                      error={bulkDownloadError}
                     />
                   </div>
                 ) : null}
@@ -650,12 +619,14 @@ function GalleryViewPage() {
                 <div className="pointer-events-none fixed inset-x-0 top-0 z-30 pt-3 md:pt-4">
                   <div className="pointer-events-auto mx-auto flex max-w-6xl justify-end px-4 md:px-6">
                     <div className="flex flex-col items-end gap-2">
-                      <ZipDownloadAllControls
-                        busy={zipAllBusy}
-                        busyLabel={zipAllMessage}
-                        onClick={startZipAllDownload}
-                        progress={zipAllProgress}
-                        error={zipAllError}
+                      <DownloadAllControls
+                        busy={bulkDownloadBusy}
+                        busyLabel={bulkDownloadMessage}
+                        onFolderClick={startFolderDownload}
+                        onZipClick={startZipDownload}
+                        folderAvailable={folderDownloadAvailable}
+                        progress={bulkDownloadProgress}
+                        error={bulkDownloadError}
                       />
                     </div>
                   </div>

@@ -17,7 +17,7 @@ import { auth } from '../../lib/firebase'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
   addPhotoRecord,
-  cleanupGalleryExportZips,
+  cleanupLegacyGalleryExportZips,
   createGallery,
   deleteGalleryDocument,
   deletePhotoRecord,
@@ -25,6 +25,7 @@ import {
   listGalleries,
   listGalleriesWithSelectedPhotos,
   setGalleryThumbnailPhoto,
+  subscribeGallery,
 } from '../../services/galleryApi'
 import {
   estimateR2MonthlyStorageUsd,
@@ -117,6 +118,32 @@ async function collectFilesFromDataTransfer(dataTransfer) {
   return Array.from(dataTransfer?.files || [])
 }
 
+function formatStorageBytes(bytes) {
+  const value = Number(bytes) || 0
+  if (value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const idx = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+  const sized = value / 1024 ** idx
+  const digits = sized >= 100 || idx === 0 ? 0 : sized >= 10 ? 1 : 2
+  return `${sized.toFixed(digits)} ${units[idx]}`
+}
+
+function formatGalleryTimestamp(ts) {
+  if (!ts?.toDate) return null
+  return ts.toDate().toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+}
+
+function galleryZipDownloadMetaLine({ downloadCount, lastDownloadedAt }) {
+  const count =
+    typeof downloadCount === 'number' && Number.isFinite(downloadCount) && downloadCount >= 0
+      ? downloadCount
+      : 0
+  const parts = [count === 1 ? '1 download-all' : `${count} download-all`]
+  const last = formatGalleryTimestamp(lastDownloadedAt)
+  if (last) parts.push(`last ${last}`)
+  return parts.join(' · ')
+}
+
 function OperationProgressBar({ progress, ariaLabelPrefix }) {
   if (!progress?.total) return null
   return (
@@ -193,9 +220,13 @@ function GalleryAdminPage() {
   const galleryStorageTotalBytes = (galleryId) =>
     (storageByGallery[galleryId] || 0) + (storageExportZipByGallery[galleryId] || 0)
 
-  const selectedExportZipBytes = selectedId ? storageExportZipByGallery[selectedId] || 0 : 0
+  const selectedLegacyExportZipBytes = selectedId ? storageExportZipByGallery[selectedId] || 0 : 0
   const selectedGalleryTotalBytes = selectedId ? galleryStorageTotalBytes(selectedId) : 0
-  const selectedHasExportZip = selectedExportZipBytes > 0
+  const selectedZipDownloadCount = selected?.zipExportDownloadCount
+  const selectedZipLastDownloadedAt = selected?.zipExportLastDownloadedAt
+  const showZipDownloadMeta =
+    (typeof selectedZipDownloadCount === 'number' && selectedZipDownloadCount > 0) ||
+    Boolean(selectedZipLastDownloadedAt)
 
   const storageOtherBytes = Math.max(
     0,
@@ -340,6 +371,30 @@ function GalleryAdminPage() {
     return () => {
       cancelled = true
     }
+  }, [selectedId, viewerBlocked])
+
+  useEffect(() => {
+    if (!selectedId || viewerBlocked) return undefined
+    return subscribeGallery(
+      selectedId,
+      (data) => {
+        if (!data) return
+        setGalleries((prev) =>
+          prev.map((gallery) =>
+            gallery.id === selectedId
+              ? {
+                  ...gallery,
+                  ...data,
+                  id: gallery.id,
+                  photoCount: gallery.photoCount,
+                  thumbnailPhoto: gallery.thumbnailPhoto,
+                }
+              : gallery,
+          ),
+        )
+      },
+      (err) => console.error('gallery subscribe error', err),
+    )
   }, [selectedId, viewerBlocked])
 
   useEffect(() => {
@@ -513,16 +568,16 @@ function GalleryAdminPage() {
     setBusy(true)
     setLoadError('')
     try {
-      const result = await cleanupGalleryExportZips()
+      const result = await cleanupLegacyGalleryExportZips()
       setCleanupExportZipsConfirm(false)
       setStorageInfoOpen(false)
       await refreshGalleries()
       const count = Number(result.deletedCount) || 0
       if (count === 0) {
-        setLoadError('No export zip files were found to delete.')
+        setLoadError('No legacy export zip files were found to delete.')
       }
     } catch (err) {
-      setLoadError(err?.message || 'Could not clean up export zips')
+      setLoadError(err?.message || 'Could not remove legacy export zips')
     } finally {
       setBusy(false)
     }
@@ -547,15 +602,7 @@ function GalleryAdminPage() {
     await refreshStorageUsage()
   }
 
-  const formatBytes = (bytes) => {
-    const value = Number(bytes) || 0
-    if (value <= 0) return '0 B'
-    const units = ['B', 'KB', 'MB', 'GB', 'TB']
-    const idx = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
-    const sized = value / 1024 ** idx
-    const digits = sized >= 100 || idx === 0 ? 0 : sized >= 10 ? 1 : 2
-    return `${sized.toFixed(digits)} ${units[idx]}`
-  }
+  const formatBytes = formatStorageBytes
 
   const onCreateGallery = async (e) => {
     e.preventDefault()
@@ -893,7 +940,7 @@ function GalleryAdminPage() {
                     <dd className="shrink-0 font-mono text-zinc-200">{formatBytes(storagePhotoTotalBytes)}</dd>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <dt>Download-all zips</dt>
+                    <dt>Legacy export zips</dt>
                     <dd className="shrink-0 font-mono text-zinc-200">{formatBytes(storageExportTotalBytes)}</dd>
                   </div>
                   {storageOtherBytes > 0 ? (
@@ -920,10 +967,10 @@ function GalleryAdminPage() {
                   onClick={onRequestCleanupExportZips}
                   className="mt-3 w-full cursor-pointer rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2 text-xs font-semibold text-white transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {busy ? 'Working…' : 'Clean up export zips'}
+                  {busy ? 'Working…' : 'Remove legacy export zips'}
                 </button>
                 {storageExportTotalBytes <= 0 ? (
-                  <p className="mt-1.5 text-[11px] text-zinc-600">No export zips in the bucket.</p>
+                  <p className="mt-1.5 text-[11px] text-zinc-600">No legacy export zips in the bucket.</p>
                 ) : null}
               </div>
             ) : null}
@@ -1177,7 +1224,7 @@ function GalleryAdminPage() {
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-zinc-200">
                       {photos.length ? `${photos.length} photos` : 'No photos yet'} ·{' '}
-                      {formatBytes(selectedGalleryTotalBytes - selectedExportZipBytes)}
+                      {formatBytes(selectedGalleryTotalBytes - selectedLegacyExportZipBytes)}
                     </h3>
                     {photos.length > 0 ? (
                       <div className="flex flex-wrap items-center gap-2">
@@ -1227,21 +1274,20 @@ function GalleryAdminPage() {
                     ) : null}
                   </div>
                   <OperationProgressBar progress={deleteProgress} ariaLabelPrefix="Delete progress" />
-                  {selectedHasExportZip && (
-                  <p className="mt-1 font-mono text-xs text-zinc-500">
-                    <span className="font-mono text-zinc-300">gallery.zip: </span>{formatBytes(selectedExportZipBytes)}
-                      {selected?.zipExportBuiltAt?.toDate ? (
-                        <>
-                          {' '}
-                          · generated{' '}
-                          {selected.zipExportBuiltAt.toDate().toLocaleString(undefined, {
-                            dateStyle: 'medium',
-                            timeStyle: 'short',
-                          })}
-                        </>
-                      ) : null}
-                  </p>
-                  )}
+                  {showZipDownloadMeta ? (
+                    <p className="mt-1 font-mono text-[11px] leading-snug text-zinc-500">
+                      {galleryZipDownloadMetaLine({
+                        downloadCount: selectedZipDownloadCount,
+                        lastDownloadedAt: selectedZipLastDownloadedAt,
+                      })}
+                    </p>
+                  ) : null}
+                  {selectedLegacyExportZipBytes > 0 ? (
+                    <p className="mt-1 font-mono text-[11px] text-amber-600/90">
+                      Legacy export zip in R2: {formatBytes(selectedLegacyExportZipBytes)} — use
+                      Remove legacy export zips in storage details.
+                    </p>
+                  ) : null}
                   <ul className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 lg:max-h-none">
                     {photos.map((p) => {
                       const fullUrl = r2PublicUrl(p.r2Key)
@@ -1367,12 +1413,13 @@ function GalleryAdminPage() {
             onClick={(ev) => ev.stopPropagation()}
           >
             <h2 id="cleanup-export-zips-dialog-title" className="text-lg font-semibold text-white">
-              Clean up export zips?
+              Remove legacy export zips?
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-zinc-400">
-              This permanently deletes all download-all zip files from R2 (
+              This permanently deletes old cached download-all zip files from R2 (
               <span className="font-mono text-zinc-300">{formatBytes(storageExportTotalBytes)}</span>
-              ). Photos and thumbnails are not affected. Clients can generate a fresh zip when they click 'Download All'.
+              ). Photos and thumbnails are not affected. Download-all now streams from the Worker and does not
+              create new export files.
             </p>
             <div className="mt-6 flex flex-wrap justify-end gap-2">
               <button
@@ -1389,7 +1436,7 @@ function GalleryAdminPage() {
                 className="cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500 disabled:opacity-50"
                 onClick={onConfirmCleanupExportZips}
               >
-                {busy ? 'Cleaning up…' : 'Delete export zips'}
+                {busy ? 'Removing…' : 'Remove legacy zips'}
               </button>
             </div>
           </div>

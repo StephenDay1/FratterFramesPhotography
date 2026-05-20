@@ -36,6 +36,24 @@ export async function getGalleryPhoto(galleryId, photoDocId) {
   return { id: snap.id, ...snap.data() }
 }
 
+/**
+ * Live updates for one gallery doc (zip export stats, title, etc.).
+ * @returns {() => void} unsubscribe
+ */
+export function subscribeGallery(galleryId, onData, onError) {
+  const ref = doc(db, 'galleries', galleryId)
+  return onSnapshot(
+    ref,
+    (snap) => {
+      onData(snap.exists() ? { id: snap.id, ...snap.data() } : undefined)
+    },
+    (err) => {
+      if (onError) onError(err)
+      else console.error('gallery snapshot error', err)
+    },
+  )
+}
+
 export async function listGalleries() {
   const snap = await getDocs(collection(db, 'galleries'))
   const rows = await Promise.all(
@@ -217,47 +235,17 @@ export async function issueGalleryDownloadTicket({ galleryId, objectKey, filenam
   return downloadUrl.trim()
 }
 
-/**
- * Starts or reuses a backend zip of all originals (see Functions: startGalleryZipExport).
- * Returns jobId and whether an existing zip was reused; subscribe with subscribeGalleryZipJob.
- */
-/** Deletes all download-all zips in R2 and clears zip cache fields on every gallery. */
-export async function cleanupGalleryExportZips() {
-  const fn = httpsCallable(functions, 'cleanupGalleryExportZips')
+/** Records a download-all zip event on the gallery (analytics). */
+export async function recordGalleryZipDownload(galleryId) {
+  const fn = httpsCallable(functions, 'recordGalleryZipDownload')
+  await fn({ galleryId })
+}
+
+/** Deletes legacy galleries/{galleryId}/exports/*.zip objects and old zip cache metadata. */
+export async function cleanupLegacyGalleryExportZips() {
+  const fn = httpsCallable(functions, 'cleanupLegacyGalleryExportZips')
   const result = await fn()
   return result.data || {}
-}
-
-export async function startGalleryZipExport(galleryId) {
-  const fn = httpsCallable(functions, 'startGalleryZipExport')
-  const result = await fn({ galleryId })
-  const jobId = result.data?.jobId
-  if (typeof jobId !== 'string' || !jobId.trim()) {
-    throw new Error('No zip job id returned')
-  }
-  return {
-    jobId: jobId.trim(),
-    reused: result.data?.reused === true,
-  }
-}
-
-/**
- * @param {(data: Record<string, unknown> | undefined) => void} onData
- * @param {(err: Error) => void} [onError]
- * @returns {() => void} unsubscribe
- */
-export function subscribeGalleryZipJob(galleryId, jobId, onData, onError) {
-  const ref = doc(db, 'galleries', galleryId, 'zipJobs', jobId)
-  return onSnapshot(
-    ref,
-    (snap) => {
-      onData(snap.exists() ? snap.data() : undefined)
-    },
-    (err) => {
-      if (onError) onError(err)
-      else console.error('zip job snapshot error', err)
-    },
-  )
 }
 
 export async function listGalleryPhotos(galleryId) {
