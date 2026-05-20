@@ -156,11 +156,14 @@ function LightboxPhoto({ photo, alt }) {
   )
 }
 
-/** @param {{ phase: 'photos' | 'finalizing' | 'download', done: number, total: number }} progress */
+const ZIP_JOB_STALL_MS = 45_000
+
+/** @param {{ phase: 'photos' | 'finalizing' | 'download', done: number, total: number, jobStatus?: string }} progress */
 function zipProgressLabel(progress) {
-  const { phase } = progress
+  const { phase, jobStatus } = progress
   if (phase === 'finalizing') return 'Finalizing zip…'
   if (phase === 'download') return 'Starting download…'
+  if (jobStatus === 'queued') return 'Waiting for server…'
   return 'Zipping photos'
 }
 
@@ -177,7 +180,9 @@ function ZipAllProgressBar({ progress }) {
   const label = zipProgressLabel(progress)
   const count = zipProgressCount(progress)
   const hasTotal = progress.total > 0
-  const widthPct = hasTotal ? Math.min(100, (100 * progress.done) / progress.total) : null
+  const indeterminate = progress.jobStatus === 'queued' || (progress.phase === 'photos' && progress.done === 0)
+  const widthPct =
+    !indeterminate && hasTotal ? Math.min(100, (100 * progress.done) / progress.total) : null
 
   return (
     <div
@@ -255,6 +260,7 @@ function GalleryViewPage() {
   const galleryTitleRef = useRef(galleryTitle)
   const downloadSlotRef = useRef(null)
   const zipJobUnsubRef = useRef(() => {})
+  const zipJobQueuedAtRef = useRef(0)
   const zipSessionRef = useRef(0)
 
   useEffect(() => {
@@ -445,7 +451,7 @@ function GalleryViewPage() {
   )
 
   const applyZipJobProgress = useCallback(
-    (data) => {
+    (data, jobStatus = 'processing') => {
       const total =
         typeof data.totalCount === 'number' && data.totalCount > 0
           ? data.totalCount
@@ -455,15 +461,31 @@ function GalleryViewPage() {
           ? Math.min(Math.max(0, data.processedCount), total)
           : 0
       if (data.zipPhase === 'finalizing') {
-        setZipAllProgress({ phase: 'finalizing', done: total, total })
+        setZipAllProgress({ phase: 'finalizing', done: total, total, jobStatus })
         setZipAllMessage('Finalizing zip…')
         return
       }
-      setZipAllProgress({ phase: 'photos', done, total })
-      setZipAllMessage(done > 0 ? `Zipping ${done}/${total}…` : 'Building zip on server…')
+      setZipAllProgress({ phase: 'photos', done, total, jobStatus })
+      if (done > 0) {
+        setZipAllMessage(`Zipping ${done}/${total}…`)
+      } else if (jobStatus === 'queued') {
+        setZipAllMessage('Waiting for server to start…')
+      } else {
+        setZipAllMessage('Zipping first photo (large files can take a minute)…')
+      }
     },
     [photos.length],
   )
+
+  const failZipJob = useCallback((message) => {
+    zipJobUnsubRef.current()
+    zipJobUnsubRef.current = () => {}
+    zipJobQueuedAtRef.current = 0
+    setZipAllError(message)
+    setZipAllBusy(false)
+    setZipAllMessage('')
+    setZipAllProgress(null)
+  }, [])
 
   const startZipAllDownload = useCallback(async () => {
     if (!galleryId || zipAllBusy || photos.length === 0) return
@@ -475,6 +497,7 @@ function GalleryViewPage() {
     setZipAllProgress(null)
     zipJobUnsubRef.current()
     zipJobUnsubRef.current = () => {}
+    zipJobQueuedAtRef.current = 0
 
     const beginZipDownload = (zipR2Key) => {
       const titleBase = (galleryTitleRef.current && galleryTitleRef.current.trim()) || 'gallery'
@@ -511,8 +534,9 @@ function GalleryViewPage() {
       if (reused) {
         setZipAllMessage('Using saved gallery zip…')
       } else {
-        setZipAllProgress({ phase: 'photos', done: 0, total: photoTotal })
-        setZipAllMessage('Building zip on server…')
+        zipJobQueuedAtRef.current = Date.now()
+        setZipAllProgress({ phase: 'photos', done: 0, total: photoTotal, jobStatus: 'queued' })
+        setZipAllMessage('Waiting for server to start…')
       }
 
       const unsub = subscribeGalleryZipJob(
@@ -522,37 +546,36 @@ function GalleryViewPage() {
           if (session !== zipSessionRef.current) return
           if (!data) return
           if (data.status === 'failed') {
-            zipJobUnsubRef.current()
-            zipJobUnsubRef.current = () => {}
-            setZipAllError(typeof data.error === 'string' ? data.error : 'Zip failed')
-            setZipAllBusy(false)
-            setZipAllMessage('')
-            setZipAllProgress(null)
+            failZipJob(typeof data.error === 'string' ? data.error : 'Zip failed')
             return
           }
-          if (data.status === 'processing' || data.status === 'queued') {
-            if (data.status === 'queued') {
-              setZipAllProgress({ phase: 'photos', done: 0, total: photoTotal })
-              setZipAllMessage('Building zip on server…')
-            } else {
-              applyZipJobProgress(data)
+          if (data.status === 'queued') {
+            if (!zipJobQueuedAtRef.current) zipJobQueuedAtRef.current = Date.now()
+            const waited = Date.now() - zipJobQueuedAtRef.current
+            if (waited >= ZIP_JOB_STALL_MS) {
+              failZipJob(
+                'Zip job never started on the server. Run `cd functions && npm install`, then `firebase deploy --only functions` (needs onGalleryZipJobQueued).',
+              )
+              return
             }
+            applyZipJobProgress(data, 'queued')
+            return
+          }
+          if (data.status === 'processing') {
+            zipJobQueuedAtRef.current = 0
+            applyZipJobProgress(data, 'processing')
             return
           }
           if (data.status === 'ready' && typeof data.zipR2Key === 'string' && data.zipR2Key) {
             zipJobUnsubRef.current()
             zipJobUnsubRef.current = () => {}
+            zipJobQueuedAtRef.current = 0
             beginZipDownload(data.zipR2Key)
           }
         },
         () => {
           if (session !== zipSessionRef.current) return
-          zipJobUnsubRef.current()
-          zipJobUnsubRef.current = () => {}
-          setZipAllError('Could not read zip job status')
-          setZipAllBusy(false)
-          setZipAllMessage('')
-          setZipAllProgress(null)
+          failZipJob('Could not read zip job status (check you are signed in to this gallery)')
         },
       )
       zipJobUnsubRef.current = unsub
@@ -564,7 +587,19 @@ function GalleryViewPage() {
         setZipAllProgress(null)
       }
     }
-  }, [galleryId, photos.length, zipAllBusy, downloadZipViaPresign, applyZipJobProgress])
+  }, [galleryId, photos.length, zipAllBusy, downloadZipViaPresign, applyZipJobProgress, failZipJob])
+
+  useEffect(() => {
+    if (!zipAllBusy || zipAllProgress?.jobStatus !== 'queued') return undefined
+    const queuedAt = zipJobQueuedAtRef.current || Date.now()
+    const timer = setInterval(() => {
+      if (Date.now() - queuedAt < ZIP_JOB_STALL_MS) return
+      failZipJob(
+        'Zip job never started on the server. Run `cd functions && npm install`, then `firebase deploy --only functions` (needs onGalleryZipJobQueued).',
+      )
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [zipAllBusy, zipAllProgress?.jobStatus, failZipJob])
 
   const heroSrc = thumbnailPhoto
     ? r2PublicUrl(thumbnailPhoto.r2Key) || r2PhotoPreviewUrl(thumbnailPhoto)
