@@ -1235,9 +1235,17 @@ function GalleryAdminPage() {
                           {' '}
                           · generated{' '}
                           {selected.zipExportBuiltAt.toDate().toLocaleString(undefined, {
-                            dateStyle: 'medium',
-                            timeStyle: 'short',
+                            dateStyle: 'short',
                           })}
+                          {selected?.zipExportLastDownloadedAt?.toDate ? (
+                            <>
+                              {' '}
+                              · last downloaded{' '}
+                              {selected.zipExportLastDownloadedAt.toDate().toLocaleString(undefined, {
+                                dateStyle: 'short',
+                              })}
+                            </>
+                          ) : null}
                         </>
                       ) : null}
                   </p>

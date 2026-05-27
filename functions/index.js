@@ -278,6 +278,13 @@ exports.issueGalleryDownloadTicket = onCall(
       throw new HttpsError('internal', err?.message || 'Could not create download URL')
     }
 
+    // Track the most recent time a gallery zip was requested for download.
+    if (data.zipExportR2Key === objectKey) {
+      await ref.update({
+        zipExportLastDownloadedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+    }
+
     return { downloadUrl }
   },
 )
