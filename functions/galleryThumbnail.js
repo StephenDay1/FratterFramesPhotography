@@ -1,7 +1,7 @@
 const { GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3')
 const sharp = require('sharp')
 const { logger } = require('firebase-functions')
-const { getR2Env, createR2S3Client } = require('./galleryZipJob')
+const { getR2Env, createR2S3Client, deleteR2ObjectIfExists } = require('./galleryZipJob')
 
 const THUMB_MAX_EDGE = 960
 const THUMB_JPEG_QUALITY = 82
@@ -15,13 +15,23 @@ const RASTER_EXT = /\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|avif)$/i
 function thumbR2KeyFromOriginalR2Key(r2Key) {
   const key = String(r2Key || '').trim()
   const match = key.match(/^galleries\/([^/]+)\/([^/]+)$/)
-  if (!match) {
-    throw new Error(`Unexpected r2Key shape: ${key}`)
-  }
+  if (!match) return null
   const galleryId = match[1]
   const filename = match[2]
+  if (!filename || key.includes('/thumbs/')) return null
   const stem = filename.replace(/\.[^.]+$/, '') || 'photo'
   return `galleries/${galleryId}/thumbs/${stem}.jpg`
+}
+
+function collectPhotoR2KeysForDeletion({ r2Key, thumbR2Key } = {}) {
+  const keys = new Set()
+  const full = String(r2Key || '').trim()
+  const thumb = String(thumbR2Key || '').trim()
+  if (full) keys.add(full)
+  if (thumb) keys.add(thumb)
+  const derived = thumbR2KeyFromOriginalR2Key(full)
+  if (derived) keys.add(derived)
+  return [...keys]
 }
 
 function isLikelyRasterObjectKey(r2Key) {
@@ -55,6 +65,9 @@ async function generateAndUploadGalleryThumbnail(r2Key) {
   }
 
   const thumbKey = thumbR2KeyFromOriginalR2Key(r2Key)
+  if (!thumbKey) {
+    throw new Error(`Unexpected r2Key shape: ${r2Key}`)
+  }
   const s3 = createR2S3Client(env)
 
   const obj = await s3.send(new GetObjectCommand({ Bucket: env.bucket, Key: r2Key }))
@@ -97,15 +110,35 @@ async function runGalleryPhotoThumbnailJob(db, galleryId, photoId, r2Key) {
     return { skipped: true }
   }
 
+  const before = await photoRef.get()
+  if (!before.exists) {
+    logger.info('galleryThumbnail skip (photo deleted before job)', { galleryId, photoId, r2Key })
+    return { skipped: true }
+  }
+
   const thumbKey = await generateAndUploadGalleryThumbnail(r2Key)
 
-  await db.runTransaction(async (t) => {
-    const snap = await t.get(photoRef)
-    if (!snap.exists) return
-    const d = snap.data()
-    if (d?.thumbR2Key) return
-    t.update(photoRef, { thumbR2Key: thumbKey })
-  })
+  const after = await photoRef.get()
+  if (!after.exists) {
+    const env = getR2Env()
+    if (env) {
+      const s3 = createR2S3Client(env)
+      await deleteR2ObjectIfExists(s3, env.bucket, thumbKey)
+    }
+    logger.info('galleryThumbnail orphan cleaned (photo deleted during job)', {
+      galleryId,
+      photoId,
+      r2Key,
+      thumbKey,
+    })
+    return { skipped: true, orphanCleaned: true }
+  }
+
+  if (typeof after.data()?.thumbR2Key === 'string' && after.data().thumbR2Key.trim()) {
+    return { skipped: true }
+  }
+
+  await photoRef.update({ thumbR2Key: thumbKey })
 
   logger.info('galleryThumbnail complete', {
     galleryId,
@@ -118,6 +151,21 @@ async function runGalleryPhotoThumbnailJob(db, galleryId, photoId, r2Key) {
   return { thumbKey }
 }
 
+async function deleteGalleryPhotoObjectsFromR2({ r2Key, thumbR2Key }) {
+  const env = getR2Env()
+  if (!env) return { deletedKeys: [] }
+
+  const keys = collectPhotoR2KeysForDeletion({ r2Key, thumbR2Key })
+  if (!keys.length) return { deletedKeys: [] }
+
+  const s3 = createR2S3Client(env)
+  for (const key of keys) {
+    await deleteR2ObjectIfExists(s3, env.bucket, key)
+  }
+  return { deletedKeys: keys }
+}
+
 module.exports = {
   runGalleryPhotoThumbnailJob,
+  deleteGalleryPhotoObjectsFromR2,
 }

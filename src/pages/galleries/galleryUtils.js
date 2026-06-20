@@ -69,3 +69,30 @@ export function defaultR2KeyForUpload(galleryId, filename) {
   const safe = sanitizeObjectSegment(filename)
   return `galleries/${galleryId}/${safe}`
 }
+
+/**
+ * Derives the JPEG thumb key from an original photo key.
+ * Matches functions/galleryThumbnail.js: galleries/{id}/thumbs/{stem}.jpg
+ */
+export function thumbR2KeyFromOriginalR2Key(r2Key) {
+  const key = String(r2Key || '').trim()
+  const match = key.match(/^galleries\/([^/]+)\/([^/]+)$/)
+  if (!match) return null
+  const galleryId = match[1]
+  const filename = match[2]
+  if (!filename || key.includes('/thumbs/')) return null
+  const stem = filename.replace(/\.[^.]+$/, '') || 'photo'
+  return `galleries/${galleryId}/thumbs/${stem}.jpg`
+}
+
+/** R2 object keys to delete for a photo (full, stored thumb, and predictable thumb path). */
+export function r2ObjectKeysForPhotoDeletion({ r2Key, thumbR2Key } = {}) {
+  const keys = new Set()
+  const full = String(r2Key || '').trim()
+  const thumb = String(thumbR2Key || '').trim()
+  if (full) keys.add(full)
+  if (thumb) keys.add(thumb)
+  const derived = thumbR2KeyFromOriginalR2Key(full)
+  if (derived) keys.add(derived)
+  return [...keys]
+}

@@ -17,9 +17,71 @@ async function getAdminAuthHeader() {
   return `Bearer ${idToken}`
 }
 
-export async function uploadToR2WithPresign({ galleryId, file, objectKey }) {
+function putFileToUrl(url, file, contentType, { signal, onUploadProgress } = {}) {
+  const useXhr = Boolean(onUploadProgress) || Boolean(signal)
+
+  if (!useXhr) {
+    return fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: file,
+    }).then((putRes) => {
+      if (!putRes.ok) {
+        throw new Error(`Upload to R2 failed (${putRes.status})`)
+      }
+    })
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', url)
+    xhr.setRequestHeader('Content-Type', contentType)
+
+    if (onUploadProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onUploadProgress(event.loaded, event.total)
+        }
+      }
+    }
+
+    const onAbort = () => {
+      xhr.abort()
+      reject(new DOMException('Upload aborted', 'AbortError'))
+    }
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve()
+        return
+      }
+      reject(new Error(`Upload to R2 failed (${xhr.status})`))
+    }
+    xhr.onerror = () => reject(new Error('Upload to R2 failed (network error)'))
+    xhr.onabort = () => reject(new DOMException('Upload aborted', 'AbortError'))
+
+    xhr.send(file)
+  })
+}
+
+export async function uploadToR2WithPresign({
+  galleryId,
+  file,
+  objectKey,
+  signal,
+  onUploadProgress,
+} = {}) {
   const signerUrl = getSignerUrl()
   const authHeader = await getAdminAuthHeader()
+  const contentType = file.type || 'application/octet-stream'
 
   const signRes = await fetch(`${signerUrl}/sign-upload`, {
     method: 'POST',
@@ -30,9 +92,10 @@ export async function uploadToR2WithPresign({ galleryId, file, objectKey }) {
     body: JSON.stringify({
       galleryId,
       filename: file.name,
-      contentType: file.type || 'application/octet-stream',
+      contentType,
       objectKey,
     }),
+    signal,
   })
 
   if (!signRes.ok) {
@@ -44,17 +107,7 @@ export async function uploadToR2WithPresign({ galleryId, file, objectKey }) {
     throw new Error('Signer response missing uploadUrl or objectKey')
   }
 
-  const putRes = await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': file.type || 'application/octet-stream',
-    },
-    body: file,
-  })
-
-  if (!putRes.ok) {
-    throw new Error(`Upload to R2 failed (${putRes.status})`)
-  }
+  await putFileToUrl(uploadUrl, file, contentType, { signal, onUploadProgress })
 
   return { objectKey: signedObjectKey }
 }

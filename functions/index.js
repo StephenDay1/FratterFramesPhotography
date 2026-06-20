@@ -46,7 +46,7 @@ const {
   isR2ZipExportConfigured,
   createPresignedGalleryDownloadUrl,
 } = require('./galleryZipJob')
-const { runGalleryPhotoThumbnailJob } = require('./galleryThumbnail')
+const { runGalleryPhotoThumbnailJob, deleteGalleryPhotoObjectsFromR2 } = require('./galleryThumbnail')
 
 /** Bound to Cloud Functions secrets so `firebase functions:secrets:set` values appear on `process.env`. */
 const R2_ZIP_EXPORT_SECRETS = [
@@ -443,6 +443,44 @@ exports.onGalleryDeleted = onDocumentDeleted(
         galleryId,
         photosDeleted,
         zipJobsDeleted,
+      })
+    }
+  },
+)
+
+/** When a photo record is removed, delete its R2 objects (including predictable thumb path). */
+exports.onGalleryPhotoDeleted = onDocumentDeleted(
+  {
+    document: 'galleries/{galleryId}/photos/{photoId}',
+    region: 'us-central1',
+    ...(appspotServiceAccount ? { serviceAccount: appspotServiceAccount } : {}),
+    secrets: R2_ZIP_EXPORT_SECRETS,
+  },
+  async (event) => {
+    const data = event.data?.data()
+    if (!data || !isR2ZipExportConfigured()) return
+
+    const r2Key = typeof data.r2Key === 'string' ? data.r2Key.trim() : ''
+    const thumbR2Key = typeof data.thumbR2Key === 'string' ? data.thumbR2Key.trim() : ''
+    if (!r2Key && !thumbR2Key) return
+
+    const { galleryId, photoId } = event.params
+    try {
+      const result = await deleteGalleryPhotoObjectsFromR2({ r2Key, thumbR2Key })
+      if (result.deletedKeys?.length) {
+        logger.info('onGalleryPhotoDeleted R2 cleanup', {
+          galleryId,
+          photoId,
+          deletedKeys: result.deletedKeys,
+        })
+      }
+    } catch (err) {
+      logger.error('onGalleryPhotoDeleted R2 cleanup failed', {
+        galleryId,
+        photoId,
+        r2Key,
+        thumbR2Key,
+        err: String(err),
       })
     }
   },

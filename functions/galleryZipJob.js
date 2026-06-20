@@ -515,6 +515,7 @@ module.exports = {
   cleanupAllGalleryExportZips,
   isR2ZipExportConfigured,
   createPresignedGalleryDownloadUrl,
+  deleteR2ObjectIfExists,
   // Used by galleryThumbnail.js
   getR2Env,
   createR2S3Client,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
@@ -12,6 +12,8 @@ import {
   Trash2,
   Upload,
   CircleX,
+  Pause,
+  Play,
 } from 'lucide-react'
 import { auth } from '../../lib/firebase'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
@@ -41,8 +43,17 @@ import {
 import {
   buildGalleryPhotoUploadBasename,
   defaultR2KeyForUpload,
+  r2ObjectKeysForPhotoDeletion,
   sanitizeObjectSegment,
 } from './galleryUtils'
+import {
+  createUploadSession,
+  formatUploadBytes,
+  readParallelUploadPreference,
+  runGalleryPhotoUploadBatch,
+  UPLOAD_CONCURRENCY,
+  writeParallelUploadPreference,
+} from './galleryUploadQueue'
 
 async function userIsGalleryViewer(user) {
   if (!user) return false
@@ -148,6 +159,178 @@ function OperationProgressBar({ progress, ariaLabelPrefix }) {
   )
 }
 
+function ParallelUploadsSwitch({
+  checked,
+  disabled = false,
+  onChange,
+  showHelperText = false,
+  className = '',
+}) {
+  const switchId = useId()
+
+  return (
+    <div className={className}>
+      <label
+        htmlFor={switchId}
+        className={`inline-flex items-start gap-3 ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+      >
+        <span className="relative mt-0.5 inline-flex shrink-0">
+          <input
+            id={switchId}
+            type="checkbox"
+            role="switch"
+            aria-checked={checked}
+            className="peer sr-only"
+            checked={checked}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.checked)}
+          />
+          <span
+            className="flex h-5 w-9 items-center rounded-full border border-zinc-600 bg-zinc-700 px-0.5 transition-[background-color,border-color,box-shadow] duration-200 peer-checked:border-amber-400 peer-checked:bg-amber-400/20 peer-disabled:border-zinc-700 peer-disabled:bg-zinc-800 peer-focus-visible:ring-2 peer-focus-visible:ring-amber-400/40 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-black peer-checked:[&>span]:translate-x-4.5"
+            aria-hidden
+          >
+            <span className="pointer-events-none block size-3 shrink-0 rounded-full bg-white shadow-sm transition-transform duration-200" />
+          </span>
+        </span>
+        <span className="text-xs leading-relaxed text-zinc-400">
+          Parallel uploads ({UPLOAD_CONCURRENCY} at a time)
+          {showHelperText ? (
+            <span className="mt-0.5 block text-[10px] text-zinc-600">
+              Recommended for high-speed connections.
+            </span>
+          ) : null}
+        </span>
+      </label>
+    </div>
+  )
+}
+
+function GalleryUploadProgress({
+  progress,
+  parallelUploadsEnabled,
+  onParallelUploadsChange,
+  onPause,
+  onResume,
+  busy,
+}) {
+  if (!progress?.total) return null
+
+  const filePercent = progress.total
+    ? Math.min(100, (100 * progress.done) / progress.total)
+    : 0
+  const bytePercent =
+    progress.totalBytes > 0
+      ? Math.min(100, (100 * progress.bytesLoaded) / progress.totalBytes)
+      : 0
+  const showByteBar = progress.totalBytes > 0
+
+  return (
+    <div className="mt-3 max-w-md space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-zinc-500">
+        <span className="min-w-0 truncate" title={progress.statusText}>
+          {progress.statusText}
+        </span>
+        <span className="shrink-0 font-mono tabular-nums">
+          {progress.done}/{progress.total}
+          {progress.failed > 0 ? ` · ${progress.failed} failed` : ''}
+        </span>
+      </div>
+
+      <div
+        className="h-2 overflow-hidden rounded-full bg-zinc-800"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={progress.total}
+        aria-valuenow={progress.done}
+        aria-label={`Upload progress ${progress.done} of ${progress.total} files`}
+      >
+        <div
+          className="h-full rounded-full bg-zinc-300 transition-[width] duration-200 ease-out"
+          style={{ width: `${filePercent}%` }}
+        />
+      </div>
+
+      {showByteBar ? (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-600">
+            <span>Data transferred</span>
+            <span className="font-mono tabular-nums">
+              {formatUploadBytes(progress.bytesLoaded)} / {formatUploadBytes(progress.totalBytes)}
+            </span>
+          </div>
+          <div
+            className="h-1.5 overflow-hidden rounded-full bg-zinc-900"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={progress.totalBytes}
+            aria-valuenow={progress.bytesLoaded}
+            aria-label="Upload bytes transferred"
+          >
+            <div
+              className="h-full rounded-full bg-zinc-500 transition-[width] duration-200 ease-out"
+              style={{ width: `${bytePercent}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {progress.inFlightLabels?.length > 0 ? (
+        <p className="text-[10px] leading-relaxed text-zinc-600">
+          In progress: {progress.inFlightLabels.join(', ')}
+        </p>
+      ) : null}
+
+      {progress.failedItems?.length > 0 ? (
+        <ul className="max-h-24 space-y-0.5 overflow-y-auto text-[10px] text-red-300/90">
+          {progress.failedItems.map((item) => (
+            <li key={item.label} className="truncate" title={item.error}>
+              {item.label}: {item.error}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        {busy ? (
+          progress.paused ? (
+            <button
+              type="button"
+              onClick={onResume}
+              className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-zinc-600 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-400 hover:bg-zinc-900"
+            >
+              <Play className="h-3.5 w-3.5" aria-hidden />
+              Resume
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onPause}
+              className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-zinc-600 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-400 hover:bg-zinc-900"
+            >
+              <Pause className="h-3.5 w-3.5" aria-hidden />
+              Pause
+            </button>
+          )
+        ) : null}
+
+        <ParallelUploadsSwitch
+          checked={parallelUploadsEnabled}
+          disabled={busy}
+          onChange={onParallelUploadsChange}
+          showHelperText
+        />
+      </div>
+
+      {!parallelUploadsEnabled ? (
+        <p className="text-[10px] text-zinc-600">
+          Sequential mode uploads one file at a time. Use this if parallel uploads cause issues on
+          your connection.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function GalleryAdminPage() {
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
@@ -183,7 +366,11 @@ function GalleryAdminPage() {
   const fileInputRef = useRef(null)
   const uploadDragDepthRef = useRef(0)
   const storageInfoRef = useRef(null)
+  const uploadSessionRef = useRef(null)
   const [uploadDropActive, setUploadDropActive] = useState(false)
+  const [parallelUploadsEnabled, setParallelUploadsEnabled] = useState(() =>
+    readParallelUploadPreference(),
+  )
 
   const selected = useMemo(
     () => galleries.find((g) => g.id === selectedId) || null,
@@ -486,20 +673,18 @@ function GalleryAdminPage() {
   }
 
   const deletePhotoFromStorage = async (photo) => {
-    if (photo.thumbR2Key) {
+    const keys = r2ObjectKeysForPhotoDeletion(photo)
+    let primaryDeleteFailed = false
+    for (const key of keys) {
       try {
-        await deleteFromR2(photo.thumbR2Key)
+        await deleteFromR2(key)
       } catch (err) {
-        console.warn('R2 thumb delete failed', err)
+        console.warn('R2 delete failed', key, err)
+        if (key === photo?.r2Key) primaryDeleteFailed = true
       }
     }
-    if (photo?.r2Key) {
-      try {
-        await deleteFromR2(photo.r2Key)
-      } catch (err) {
-        console.warn('R2 delete failed; removing Firestore record anyway', err)
-        setLoadError(`R2 delete failed (${err?.message || 'unknown'}); record removed.`)
-      }
+    if (primaryDeleteFailed) {
+      setLoadError('R2 delete failed for the original photo; Firestore record removed anyway.')
     }
     await deletePhotoRecord(selectedId, photo.id)
   }
@@ -595,54 +780,109 @@ function GalleryAdminPage() {
 
     const uploadStartCount = photos.length
     const galleryTitle = selected?.title || 'gallery'
-    const firstBasename = buildGalleryPhotoUploadBasename({
-      galleryTitle,
-      sequenceOneBased: uploadStartCount + 1,
-      file: fileList[0],
+    const concurrency = parallelUploadsEnabled ? UPLOAD_CONCURRENCY : 1
+    const items = fileList.map((file, i) => {
+      const displayBasename = buildGalleryPhotoUploadBasename({
+        galleryTitle,
+        sequenceOneBased: uploadStartCount + i + 1,
+        file,
+      })
+      return {
+        id: `upload-${Date.now()}-${i}-${file.name}-${file.size}`,
+        file,
+        displayBasename,
+        label: truncateProgressLabel(displayBasename),
+      }
     })
+
+    const session = createUploadSession()
+    uploadSessionRef.current = session
+
     setBusy(true)
     setLoadError('')
     setUploadProgress({
+      total: items.length,
       done: 0,
-      total: fileList.length,
-      currentLabel: truncateProgressLabel(firstBasename),
+      failed: 0,
+      pending: items.length,
+      inFlight: 0,
+      paused: false,
+      cancelled: false,
+      bytesLoaded: 0,
+      totalBytes: items.reduce((sum, item) => sum + (Number(item.file?.size) || 0), 0),
+      inFlightLabels: [],
+      failedItems: [],
+      statusText: parallelUploadsEnabled
+        ? `Starting parallel upload (${concurrency} at a time)…`
+        : 'Starting sequential upload…',
+      currentLabel: items[0]?.label || '',
+      parallel: parallelUploadsEnabled,
+      concurrency,
     })
+
     try {
-      for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i]
-        const displayBasename = buildGalleryPhotoUploadBasename({
-          galleryTitle,
-          sequenceOneBased: uploadStartCount + i + 1,
-          file,
-        })
-        const label = truncateProgressLabel(displayBasename)
-        setUploadProgress({ done: i, total: fileList.length, currentLabel: label })
-        const expectedKey = defaultR2KeyForUpload(selectedId, displayBasename)
-        const { objectKey: r2Key } = await uploadToR2WithPresign({
-          galleryId: selectedId,
-          file,
-          objectKey: expectedKey,
-        })
-        await addPhotoRecord({
-          galleryId: selectedId,
-          ownerUid: user.uid,
-          r2Key,
-          filename: displayBasename,
-        })
-        setUploadProgress({
-          done: i + 1,
-          total: fileList.length,
-          currentLabel: label,
-        })
+      const result = await runGalleryPhotoUploadBatch({
+        items,
+        concurrency,
+        session,
+        onProgress: setUploadProgress,
+        uploadOne: async (item, { signal, onByteProgress }) => {
+          const expectedKey = defaultR2KeyForUpload(selectedId, item.displayBasename)
+          const { objectKey: r2Key } = await uploadToR2WithPresign({
+            galleryId: selectedId,
+            file: item.file,
+            objectKey: expectedKey,
+            signal,
+            onUploadProgress: (loaded) => onByteProgress(loaded),
+          })
+          await addPhotoRecord({
+            galleryId: selectedId,
+            ownerUid: user.uid,
+            r2Key,
+            filename: item.displayBasename,
+          })
+        },
+      })
+
+      if (result.failed > 0) {
+        const summary = result.failedItems
+          .slice(0, 3)
+          .map((item) => item.label)
+          .join(', ')
+        setLoadError(
+          `${result.failed} of ${result.total} file(s) failed to upload${
+            summary ? `: ${summary}${result.failed > 3 ? '…' : ''}` : ''
+          }`,
+        )
       }
-      await refreshPhotos()
+
+      if (result.done > 0) {
+        await refreshPhotos()
+      }
     } catch (err) {
       setLoadError(err?.message || 'Could not register files')
     } finally {
+      uploadSessionRef.current = null
       setBusy(false)
       setUploadProgress(null)
       if (resetInput) resetInput.value = ''
     }
+  }
+
+  const onParallelUploadsChange = (enabled) => {
+    setParallelUploadsEnabled(enabled)
+    writeParallelUploadPreference(enabled)
+  }
+
+  const pauseUploads = () => {
+    uploadSessionRef.current?.pause()
+    setUploadProgress((prev) =>
+      prev ? { ...prev, paused: true, statusText: `Paused · ${prev.done}/${prev.total} complete` } : prev,
+    )
+  }
+
+  const resumeUploads = () => {
+    uploadSessionRef.current?.resume()
   }
 
   const onRegisterFiles = async (e) => {
@@ -937,7 +1177,7 @@ function GalleryAdminPage() {
                 key={g.id}
                 className={`flex w-full items-stretch gap-0.5 rounded-lg border text-sm transition ${
                   g.id === selectedId
-                    ? 'border-white bg-zinc-900'
+                    ? 'border-amber-400 bg-amber-400/15'
                     : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-600'
                 }`}
               >
@@ -1046,7 +1286,7 @@ function GalleryAdminPage() {
                 </p>
               </header>
 
-              <div className="mt-8 grid min-h-0 flex-1 auto-rows-[minmax(0,1fr)] grid-cols-1 gap-8 overflow-hidden lg:grid-cols-2">
+              <div className="mt-8 grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-8 overflow-hidden lg:grid-cols-2">
                 <div className="min-h-0">
                   <h3 className="text-sm font-semibold text-zinc-200">Register uploads</h3>
                   <p className="mt-2 text-xs text-zinc-500">
@@ -1068,7 +1308,9 @@ function GalleryAdminPage() {
                       aria-disabled={busy || undefined}
                       aria-label={
                         busy && uploadProgress
-                          ? `Uploading ${uploadProgress.done} of ${uploadProgress.total} photos`
+                          ? uploadProgress.paused
+                            ? `Upload paused, ${uploadProgress.done} of ${uploadProgress.total} photos complete`
+                            : `Uploading ${uploadProgress.done} of ${uploadProgress.total} photos`
                           : 'Upload photos: drag and drop here or choose files'
                       }
                       onClick={openFilePicker}
@@ -1077,7 +1319,7 @@ function GalleryAdminPage() {
                       onDragOver={handleUploadDragOver}
                       onDragLeave={handleUploadDragLeave}
                       onDrop={handleUploadDrop}
-                      className={`flex min-h-[9.5rem] cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition ${
+                      className={`flex min-h-9.5rem] cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition ${
                         busy
                           ? 'cursor-not-allowed border-zinc-800 bg-zinc-950/60 opacity-60'
                           : uploadDropActive
@@ -1091,7 +1333,9 @@ function GalleryAdminPage() {
                       />
                       <p className="text-sm font-medium text-zinc-200">
                         {busy && uploadProgress
-                          ? `Uploading ${uploadProgress.done}/${uploadProgress.total}…`
+                          ? uploadProgress.paused
+                            ? `Paused · ${uploadProgress.done}/${uploadProgress.total}`
+                            : `Uploading ${uploadProgress.done}/${uploadProgress.total}…`
                           : busy
                             ? 'Uploading…'
                             : uploadDropActive
@@ -1104,7 +1348,21 @@ function GalleryAdminPage() {
                         </p>
                       ) : null}
                     </div>
-                    <OperationProgressBar progress={uploadProgress} ariaLabelPrefix="Upload progress" />
+                    <GalleryUploadProgress
+                      progress={uploadProgress}
+                      parallelUploadsEnabled={parallelUploadsEnabled}
+                      onParallelUploadsChange={onParallelUploadsChange}
+                      onPause={pauseUploads}
+                      onResume={resumeUploads}
+                      busy={busy}
+                    />
+                    {!busy && !uploadProgress ? (
+                      <ParallelUploadsSwitch
+                        className="mt-3"
+                        checked={parallelUploadsEnabled}
+                        onChange={onParallelUploadsChange}
+                      />
+                    ) : null}
                   </div>
 
                   {/* <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-950/40">
