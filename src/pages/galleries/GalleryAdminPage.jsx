@@ -433,7 +433,7 @@ function GalleryAdminPage() {
   useEffect(() => {
     const previousHtmlOverflow = document.documentElement.style.overflow
     const previousBodyOverflow = document.body.style.overflow
-    const mediaQuery = window.matchMedia('(min-width: 768px)')
+    const mediaQuery = window.matchMedia('(min-width: 1024px)')
 
     const applyScrollLock = () => {
       if (mediaQuery.matches) {
@@ -1075,7 +1075,7 @@ function GalleryAdminPage() {
   }
 
   return (
-    <main className="h-screen overflow-hidden bg-black text-white">
+    <main className="min-h-screen bg-black text-white lg:h-screen lg:overflow-hidden">
       {loadError && (
         <div className="absolute top-0 right-0 z-50 m-4 flex items-center gap-2 rounded border border-red-900 bg-red-950 px-3 py-2 text-xs text-red-100">
           <p className="text-xs text-red-100">
@@ -1086,8 +1086,8 @@ function GalleryAdminPage() {
           </button>
         </div>
       )}
-      <div className="mx-auto flex h-full min-h-0 w-full flex-col gap-8 overflow-hidden px-6 py-6 lg:flex-row">
-        <aside className="flex min-h-0 w-full shrink-0 flex-col lg:w-72">
+      <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6 lg:h-full lg:min-h-0 lg:flex-row lg:overflow-hidden">
+        <aside className="flex w-full shrink-0 flex-col lg:min-h-0 lg:w-72">
           <Link to="/galleries" className="text-sm text-zinc-400 transition hover:text-white">
             ← Hub
           </Link>
@@ -1169,7 +1169,7 @@ function GalleryAdminPage() {
             ) : null}
           </div>
 
-          <div className="mt-6 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+          <div className="mt-6 space-y-2 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {galleries.map((g) => {
               const sidebarThumbUrl = r2PhotoPreviewUrl(g.thumbnailPhoto)
               return (
@@ -1254,7 +1254,7 @@ function GalleryAdminPage() {
           </form>
         </aside>
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <section className="flex min-w-0 flex-col lg:min-h-0 lg:flex-1 lg:overflow-hidden">
           {!selected ? (
             <p className="text-sm text-zinc-400">Select or create a gallery.</p>
           ) : (
@@ -1286,8 +1286,8 @@ function GalleryAdminPage() {
                 </p>
               </header>
 
-              <div className="mt-8 grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-8 overflow-hidden lg:grid-cols-2">
-                <div className="min-h-0">
+              <div className="mt-8 grid grid-cols-1 gap-8 lg:auto-rows-fr lg:grid-cols-2 lg:min-h-0 lg:flex-1 lg:overflow-hidden">
+                <div className="lg:min-h-0">
                   <h3 className="text-sm font-semibold text-zinc-200">Register uploads</h3>
                   <p className="mt-2 text-xs text-zinc-500">
                     File selection now uploads directly to R2 using a Cloudflare Worker presigned
@@ -1431,7 +1431,7 @@ function GalleryAdminPage() {
                   </div> */}
                 </div>
 
-                <div className="flex min-h-0 flex-col lg:h-full">
+                <div className="flex flex-col lg:min-h-0 lg:h-full">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-zinc-200">
                       {photos.length ? `${photos.length} photos` : 'No photos yet'} ·{' '}
@@ -1508,7 +1508,7 @@ function GalleryAdminPage() {
                       ) : null}
                   </p>
                   )}
-                  <ul className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 lg:max-h-none">
+                  <ul className="mt-4 space-y-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
                     {photos.map((p) => {
                       const fullUrl = r2PublicUrl(p.r2Key)
                       const thumbUrl = r2PhotoPreviewUrl(p) || fullUrl
