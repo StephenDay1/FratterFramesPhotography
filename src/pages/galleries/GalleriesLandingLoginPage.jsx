@@ -2,11 +2,13 @@ import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { signInWithCustomToken } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
+import { useRedirectIfAuthenticated } from '../../lib/authRedirect'
 import { setStoredGalleryTitle, verifyGalleryKeyCallable } from '../../services/galleryApi'
 
 function GalleriesHubPage() {
   const location = useLocation()
   const navigate = useNavigate()
+  const checkingSession = useRedirectIfAuthenticated()
   const [clientGalleryId, setClientGalleryId] = useState(() => {
     const fromGalleryId = location.state?.from
     return typeof fromGalleryId === 'string' ? fromGalleryId : ''
@@ -30,6 +32,14 @@ function GalleriesHubPage() {
     } finally {
       setBusy(false)
     }
+  }
+
+  if (checkingSession) {
+    return (
+      <main className="min-h-screen bg-black px-6 py-16 text-white">
+        <p className="text-sm text-zinc-400">Checking session…</p>
+      </main>
+    )
   }
 
   return (

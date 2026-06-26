@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { signOut } from 'firebase/auth'
+import { auth } from '../../lib/firebase'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import { triggerPresignedBrowserDownload } from '../../lib/triggerPresignedDownload'
 import {
@@ -240,6 +242,7 @@ function ZipDownloadAllControls({ busy, busyLabel, onClick, progress, error }) {
 
 function GalleryViewPage() {
   const { galleryId } = useParams()
+  const navigate = useNavigate()
   const [photos, setPhotos] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -659,12 +662,16 @@ function GalleryViewPage() {
           <div className={hasHero ? 'bg-black/0' : ''}>
             <div className="mx-auto max-w-6xl px-4 pb-10 md:px-6 md:pb-12">
               <div className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-                <Link
-                  to="/galleries"
-                  className="text-sm font-medium tracking-wide text-zinc-200 transition hover:text-white"
+                <button
+                  type="button"
+                  className="text-left text-sm font-medium tracking-wide text-zinc-200 transition hover:text-white"
+                  onClick={async () => {
+                    await signOut(auth)
+                    navigate('/galleries', { replace: true })
+                  }}
                 >
                   ← Galleries hub
-                </Link>
+                </button>
                 {showDownloadAll ? (
                   <div
                     ref={downloadSlotRef}

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Link, Navigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
   CheckSquare,
@@ -332,6 +332,7 @@ function GalleryUploadProgress({
 }
 
 function GalleryAdminPage() {
+  const navigate = useNavigate()
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
   const [viewerBlocked, setViewerBlocked] = useState(false)
@@ -1088,18 +1089,25 @@ function GalleryAdminPage() {
       )}
       <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6 lg:h-full lg:min-h-0 lg:flex-row lg:overflow-hidden">
         <aside className="flex w-full shrink-0 flex-col lg:min-h-0 lg:w-72">
-          <Link to="/galleries" className="text-sm text-zinc-400 transition hover:text-white">
-            ← Hub
-          </Link>
+          <button
+            type="button"
+            className="text-left text-sm text-zinc-400 transition hover:text-white"
+            onClick={async () => {
+              await signOut(auth)
+              navigate('/galleries', { replace: true })
+            }}
+          >
+            ← Sign out
+          </button>
           <div className="mt-6 flex items-center justify-between gap-3">
             <h1 className="text-lg font-semibold">Admin</h1>
-            <button
+            {/* <button
               type="button"
               className="text-xs font-medium text-zinc-400 cursor-pointer transition hover:text-white"
               onClick={() => signOut(auth)}
             >
               Sign out
-            </button>
+            </button> */}
           </div>
           <p className="mt-2 text-xs leading-relaxed text-zinc-500">
             Manage your galleries and photos here.  Storage is running on Cloudflare R2 with Firebase Firestore for metadata.

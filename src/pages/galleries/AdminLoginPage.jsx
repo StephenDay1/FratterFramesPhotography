@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { signInWithEmailAndPassword } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
+import { useRedirectIfAuthenticated } from '../../lib/authRedirect'
 
 function AdminLoginPage() {
   const navigate = useNavigate()
+  const checkingSession = useRedirectIfAuthenticated()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -22,6 +24,14 @@ function AdminLoginPage() {
     } finally {
       setBusy(false)
     }
+  }
+
+  if (checkingSession) {
+    return (
+      <main className="min-h-screen bg-black px-6 py-16 text-white">
+        <p className="text-sm text-zinc-400">Checking session…</p>
+      </main>
+    )
   }
 
   return (
