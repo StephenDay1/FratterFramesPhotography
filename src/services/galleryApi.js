@@ -121,8 +121,20 @@ export async function setGalleryThumbnailPhoto(galleryId, photoDocId) {
   if (photoDocId) {
     await updateDoc(ref, { thumbnailPhotoId: photoDocId })
   } else {
-    await updateDoc(ref, { thumbnailPhotoId: deleteField() })
+    await updateDoc(ref, { thumbnailPhotoId: deleteField(), heroFrame: deleteField() })
   }
+}
+
+/** Persists hero background framing (focal point + zoom) on the gallery document. */
+export async function setGalleryHeroFrame(galleryId, frame) {
+  const ref = doc(db, 'galleries', galleryId)
+  await updateDoc(ref, {
+    heroFrame: {
+      focalX: frame.focalX,
+      focalY: frame.focalY,
+      scale: frame.scale,
+    },
+  })
 }
 
 const GALLERY_TITLE_STORAGE_PREFIX = 'ffGalleryTitle:'
@@ -133,6 +145,19 @@ export function setStoredGalleryTitle(galleryId, title) {
     sessionStorage.setItem(GALLERY_TITLE_STORAGE_PREFIX + galleryId, title.trim())
   } catch {
     // ignore storage errors
+  }
+}
+
+function normalizeHeroFrame(data) {
+  if (!data || typeof data !== 'object') return null
+  const focalX = Number(data.focalX)
+  const focalY = Number(data.focalY)
+  const scale = Number(data.scale)
+  if (!Number.isFinite(focalX) || !Number.isFinite(focalY) || !Number.isFinite(scale)) return null
+  return {
+    focalX: Math.min(100, Math.max(0, focalX)),
+    focalY: Math.min(100, Math.max(0, focalY)),
+    scale: Math.min(2.5, Math.max(1.05, scale)),
   }
 }
 
@@ -157,12 +182,13 @@ async function getGalleryViewInfoViaCallable(galleryId) {
       ? result.data.title.trim()
       : null
   const thumbnailPhoto = normalizeThumbnailPhoto(result.data?.thumbnailPhoto)
-  return { title, thumbnailPhoto }
+  const heroFrame = normalizeHeroFrame(result.data?.heroFrame)
+  return { title, thumbnailPhoto, heroFrame }
 }
 
 /** Title and optional hero thumbnail for gallery view (owners + client viewers). */
 export async function getGalleryViewInfo(galleryId) {
-  if (!galleryId) return { title: null, thumbnailPhoto: null }
+  if (!galleryId) return { title: null, thumbnailPhoto: null, heroFrame: null }
   try {
     const snap = await getDoc(doc(db, 'galleries', galleryId))
     if (snap.exists()) {
@@ -174,7 +200,8 @@ export async function getGalleryViewInfo(galleryId) {
       const thumbnailPhoto = thumbnailPhotoId
         ? await getGalleryPhoto(galleryId, thumbnailPhotoId)
         : null
-      return { title, thumbnailPhoto }
+      const heroFrame = normalizeHeroFrame(data.heroFrame)
+      return { title, thumbnailPhoto, heroFrame }
     }
   } catch {
     // expected for viewer tokens due to Firestore rules
@@ -186,11 +213,11 @@ export async function getGalleryViewInfo(galleryId) {
   }
   try {
     const stored = sessionStorage.getItem(GALLERY_TITLE_STORAGE_PREFIX + galleryId)
-    if (stored?.trim()) return { title: stored.trim(), thumbnailPhoto: null }
+    if (stored?.trim()) return { title: stored.trim(), thumbnailPhoto: null, heroFrame: null }
   } catch {
     // ignore storage errors
   }
-  return { title: null, thumbnailPhoto: null }
+  return { title: null, thumbnailPhoto: null, heroFrame: null }
 }
 
 export async function getGalleryTitleForView(galleryId) {

@@ -5,7 +5,9 @@ import {
   CheckSquare,
   Copy,
   CopyCheck,
+  Crop,
   Info,
+  Pencil,
   Square,
   SquareArrowOutUpRight,
   Star,
@@ -26,6 +28,7 @@ import {
   listGalleryPhotos,
   listGalleries,
   listGalleriesWithSelectedPhotos,
+  setGalleryHeroFrame,
   setGalleryThumbnailPhoto,
 } from '../../services/galleryApi'
 import {
@@ -54,6 +57,8 @@ import {
   UPLOAD_CONCURRENCY,
   writeParallelUploadPreference,
 } from './galleryUploadQueue'
+import HeroFrameEditor from './HeroFrameEditor'
+import { heroImageStyle, HERO_DEFAULT_FRAME, normalizeHeroFrame } from './heroFrame'
 
 async function userIsGalleryViewer(user) {
   if (!user) return false
@@ -67,6 +72,7 @@ function truncateProgressLabel(text) {
 }
 
 const GALLERY_PHOTO_ACCEPT = 'image/*,.heic,.heif'
+const PHOTO_DRAG_SELECT_THRESHOLD_PX = 6
 
 function isGalleryPhotoFile(file) {
   if (!file || !(file instanceof File)) return false
@@ -358,12 +364,16 @@ function GalleryAdminPage() {
   const [storageInfoOpen, setStorageInfoOpen] = useState(false)
   const [cleanupExportZipsConfirm, setCleanupExportZipsConfirm] = useState(false)
   const [deleteConfirmGallery, setDeleteConfirmGallery] = useState(null)
+  const [heroEditorOpen, setHeroEditorOpen] = useState(false)
+  const [heroEditorSaving, setHeroEditorSaving] = useState(false)
   /** Set only while a multi-file R2 upload is running; drives the progress bar. */
   const [uploadProgress, setUploadProgress] = useState(null)
   /** Set only while bulk-deleting photos; drives the delete progress bar. */
   const [deleteProgress, setDeleteProgress] = useState(null)
   /** Skips one selectedId effect run after initial hydrate loads photos in the same batch. */
   const skipPhotosLoadForSelectedIdRef = useRef(false)
+  const selectionAnchorRef = useRef(null)
+  const dragSelectRef = useRef(null)
   const fileInputRef = useRef(null)
   const uploadDragDepthRef = useRef(0)
   const storageInfoRef = useRef(null)
@@ -501,7 +511,24 @@ function GalleryAdminPage() {
   useEffect(() => {
     setSelectionMode(false)
     setSelectedPhotoIds(new Set())
+    selectionAnchorRef.current = null
+    dragSelectRef.current = null
   }, [selectedId])
+
+  useEffect(() => {
+    if (!selectionMode) return undefined
+    const onPointerUp = (ev) => {
+      const drag = dragSelectRef.current
+      if (!drag || drag.pointerId !== ev.pointerId) return
+      if (!drag.moved && !ev.shiftKey) {
+        togglePhotoSelected(drag.startId)
+      }
+      selectionAnchorRef.current = drag.startId
+      dragSelectRef.current = null
+    }
+    window.addEventListener('pointerup', onPointerUp)
+    return () => window.removeEventListener('pointerup', onPointerUp)
+  }, [selectionMode])
 
   useEffect(() => {
     if (!selectedId || viewerBlocked) return
@@ -616,6 +643,8 @@ function GalleryAdminPage() {
   const exitSelectionMode = () => {
     setSelectionMode(false)
     setSelectedPhotoIds(new Set())
+    selectionAnchorRef.current = null
+    dragSelectRef.current = null
   }
 
   const togglePhotoSelected = (photoId) => {
@@ -627,6 +656,69 @@ function GalleryAdminPage() {
     })
   }
 
+  const applyPhotoRangeSelection = (startId, endId, { deselect = false } = {}) => {
+    const startIdx = photos.findIndex((p) => p.id === startId)
+    const endIdx = photos.findIndex((p) => p.id === endId)
+    if (startIdx === -1 || endIdx === -1) return
+    const lo = Math.min(startIdx, endIdx)
+    const hi = Math.max(startIdx, endIdx)
+    const rangeIds = photos.slice(lo, hi + 1).map((p) => p.id)
+    setSelectedPhotoIds((prev) => {
+      const next = new Set(prev)
+      rangeIds.forEach((id) => {
+        if (deselect) next.delete(id)
+        else next.add(id)
+      })
+      return next
+    })
+  }
+
+  const photoIdFromPointerTarget = (target) => {
+    const el = target?.closest?.('[data-photo-id]')
+    return el?.dataset.photoId ?? null
+  }
+
+  const onPhotoListPointerMove = (ev) => {
+    if (!selectionMode || busy || !dragSelectRef.current) return
+    if (ev.buttons !== 1) return
+    const drag = dragSelectRef.current
+    const dx = ev.clientX - drag.startX
+    const dy = ev.clientY - drag.startY
+    if (
+      !drag.moved &&
+      dx * dx + dy * dy < PHOTO_DRAG_SELECT_THRESHOLD_PX * PHOTO_DRAG_SELECT_THRESHOLD_PX
+    ) {
+      return
+    }
+    drag.moved = true
+    const photoId =
+      photoIdFromPointerTarget(ev.target) ||
+      photoIdFromPointerTarget(document.elementFromPoint(ev.clientX, ev.clientY))
+    if (!photoId || photoId === drag.lastRangeEndId) return
+    drag.lastRangeEndId = photoId
+    applyPhotoRangeSelection(drag.startId, photoId, { deselect: drag.deselecting })
+  }
+
+  const onPhotoPointerDown = (photoId, ev) => {
+    if (!selectionMode || busy || ev.button !== 0) return
+    ev.preventDefault()
+    dragSelectRef.current = {
+      startId: photoId,
+      moved: false,
+      pointerId: ev.pointerId,
+      startX: ev.clientX,
+      startY: ev.clientY,
+      lastRangeEndId: null,
+      deselecting: selectedPhotoIds.has(photoId),
+    }
+    if (ev.shiftKey && selectionAnchorRef.current != null) {
+      applyPhotoRangeSelection(selectionAnchorRef.current, photoId)
+      dragSelectRef.current.moved = true
+      dragSelectRef.current.lastRangeEndId = photoId
+      selectionAnchorRef.current = photoId
+    }
+  }
+
   const onSelectAllPhotos = () => {
     setSelectedPhotoIds(new Set(photos.map((p) => p.id)))
   }
@@ -636,7 +728,7 @@ function GalleryAdminPage() {
       prev.map((gallery) => {
         if (gallery.id !== galleryId) return gallery
         if (!photoDocId) {
-          const { thumbnailPhotoId, thumbnailPhoto, ...rest } = gallery
+          const { thumbnailPhotoId, thumbnailPhoto, heroFrame, ...rest } = gallery
           return rest
         }
         return {
@@ -645,6 +737,12 @@ function GalleryAdminPage() {
           thumbnailPhoto: photoRecord ?? gallery.thumbnailPhoto,
         }
       }),
+    )
+  }
+
+  const patchGalleryHeroFrameInList = (galleryId, frame) => {
+    setGalleries((prev) =>
+      prev.map((gallery) => (gallery.id === galleryId ? { ...gallery, heroFrame: frame } : gallery)),
     )
   }
 
@@ -658,18 +756,43 @@ function GalleryAdminPage() {
     if (!selectedId || busy) return
     const previousId = selected?.thumbnailPhotoId ?? null
     const previousPhoto = selected?.thumbnailPhoto ?? null
+    const previousHeroFrame = selected?.heroFrame ?? null
     const nextId = previousId === photoDocId ? null : photoDocId
     const nextPhoto = nextId ? photos.find((p) => p.id === nextId) ?? null : null
     patchGalleryThumbnailInList(selectedId, nextId, nextPhoto)
+    if (nextId && nextId !== previousId) {
+      patchGalleryHeroFrameInList(selectedId, { ...HERO_DEFAULT_FRAME })
+    }
     try {
       await setGalleryThumbnailPhoto(selectedId, nextId)
+      if (nextId && nextId !== previousId) {
+        await setGalleryHeroFrame(selectedId, HERO_DEFAULT_FRAME)
+      }
     } catch (err) {
       patchGalleryThumbnailInList(
         selectedId,
         previousId || null,
         previousId ? previousPhoto : null,
       )
+      if (nextId && nextId !== previousId) {
+        patchGalleryHeroFrameInList(selectedId, previousHeroFrame)
+      }
       setLoadError(err?.message || 'Could not update gallery thumbnail')
+    }
+  }
+
+  const onSaveHeroFrame = async (frame) => {
+    if (!selectedId) return
+    setHeroEditorSaving(true)
+    patchGalleryHeroFrameInList(selectedId, frame)
+    try {
+      await setGalleryHeroFrame(selectedId, frame)
+      setHeroEditorOpen(false)
+    } catch (err) {
+      patchGalleryHeroFrameInList(selectedId, selected?.heroFrame ?? null)
+      setLoadError(err?.message || 'Could not save hero framing')
+    } finally {
+      setHeroEditorSaving(false)
     }
   }
 
@@ -1268,30 +1391,57 @@ function GalleryAdminPage() {
           ) : (
             <>
               <header className="border-b border-zinc-800 pb-6">
-                <h2 className="text-2xl font-semibold">{selected.title || 'Untitled'}</h2>
-                <div className="mt-2 flex flex-wrap items-center gap-3">
-                  <p className="font-mono text-sm text-zinc-400">Share: /galleries/{selected.id}</p>
-                  <button
-                    type="button"
-                    className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
-                    onClick={onCopyShareLink}
-                    aria-label="Copy share link"
-                    title="Copy share link"
-                  >
-                    {copyStatus ? <CopyCheck className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
-                    aria-label="View gallery"
-                    title="View gallery"
-                  >
-                    <Link to={`/galleries/${selected.id}`} target="_blank" className="text-xs"><SquareArrowOutUpRight className="h-4 w-4" aria-hidden="true" /></Link>
-                  </button>
+                <div className="flex gap-4">
+                  {selected?.thumbnailPhoto ? (
+                    <div className="relative h-22 w-32 shrink-0 overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-zinc-700 sm:w-36">
+                      <img
+                        src={
+                          r2PublicUrl(selected.thumbnailPhoto.r2Key) ||
+                          r2PhotoPreviewUrl(selected.thumbnailPhoto)
+                        }
+                        alt=""
+                        className="h-full w-full object-cover"
+                        style={heroImageStyle(normalizeHeroFrame(selected.heroFrame))}
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-1 bottom-1 cursor-pointer rounded-md bg-black/75 p-1.5 text-zinc-200 transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => setHeroEditorOpen(true)}
+                        disabled={busy || heroEditorSaving}
+                        aria-label="Edit cover photo"
+                        title="Edit cover photo"
+                      >
+                        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-2xl font-semibold">{selected.title || 'Untitled'}</h2>
+                    <div className="mt-1 flex flex-wrap items-center gap-3">
+                      <p className="font-mono text-xs text-zinc-400">{selected.id}</p>
+                      <button
+                        type="button"
+                        className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
+                        onClick={onCopyShareLink}
+                        aria-label="Copy share link"
+                        title="Copy share link"
+                      >
+                        {copyStatus ? <CopyCheck className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
+                        aria-label="View gallery"
+                        title="View gallery"
+                      >
+                        <Link to={`/galleries/${selected.id}`} target="_blank" className="text-xs"><SquareArrowOutUpRight className="h-4 w-4" aria-hidden="true" /></Link>
+                      </button>
+                    </div>
+                    <p className="mt-1 text-sm text-zinc-500">
+                      Client access key: <span className="font-mono text-zinc-300">{selected.clientAccessKey}</span>
+                    </p>
+                  </div>
                 </div>
-                <p className="mt-3 text-sm text-zinc-500">
-                  Client access key: <span className="font-mono text-zinc-300">{selected.clientAccessKey}</span>
-                </p>
               </header>
 
               <div className="mt-8 grid grid-cols-1 gap-8 lg:auto-rows-fr lg:grid-cols-2 lg:min-h-0 lg:flex-1 lg:overflow-hidden">
@@ -1516,7 +1666,15 @@ function GalleryAdminPage() {
                       ) : null}
                   </p>
                   )}
-                  <ul className="mt-4 space-y-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+                  <ul
+                    className={`mt-4 space-y-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto${
+                      selectionMode ? ' select-none' : ''
+                    }`}
+                    onPointerMove={selectionMode && !busy ? onPhotoListPointerMove : undefined}
+                    onSelectStart={
+                      selectionMode ? (ev) => ev.preventDefault() : undefined
+                    }
+                  >
                     {photos.map((p) => {
                       const fullUrl = r2PublicUrl(p.r2Key)
                       const thumbUrl = r2PhotoPreviewUrl(p) || fullUrl
@@ -1526,14 +1684,15 @@ function GalleryAdminPage() {
                       return (
                         <li
                           key={p.id}
+                          data-photo-id={p.id}
                           className={`flex gap-3 rounded-lg border p-2 transition ${
                             selectionMode && isSelected
                               ? 'border-zinc-500 bg-zinc-900/80'
                               : 'border-zinc-800 bg-zinc-950/60'
-                          }${selectionMode ? ' cursor-pointer' : ''}`}
-                          onClick={
+                          }${selectionMode ? ' cursor-pointer select-none' : ''}`}
+                          onPointerDown={
                             selectionMode && !busy
-                              ? () => togglePhotoSelected(p.id)
+                              ? (ev) => onPhotoPointerDown(p.id, ev)
                               : undefined
                           }
                         >
@@ -1541,9 +1700,11 @@ function GalleryAdminPage() {
                             <button
                               type="button"
                               disabled={busy}
+                              onPointerDown={(ev) => ev.stopPropagation()}
                               onClick={(ev) => {
                                 ev.stopPropagation()
                                 togglePhotoSelected(p.id)
+                                selectionAnchorRef.current = p.id
                               }}
                               aria-pressed={isSelected}
                               aria-label={isSelected ? `Deselect ${p.filename}` : `Select ${p.filename}`}
@@ -1563,6 +1724,7 @@ function GalleryAdminPage() {
                                 alt=""
                                 className="h-full w-full object-cover"
                                 loading="lazy"
+                                draggable={false}
                               />
                             ) : (
                               <div className="flex h-full items-center justify-center text-[10px] text-zinc-600">
@@ -1603,6 +1765,21 @@ function GalleryAdminPage() {
                                   aria-hidden="true"
                                 />
                               </button>
+                              {isThumbnail ? (
+                                <button
+                                  type="button"
+                                  className="cursor-pointer text-zinc-500 transition hover:text-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation()
+                                    setHeroEditorOpen(true)
+                                  }}
+                                  disabled={busy || heroEditorSaving}
+                                  aria-label={`Adjust hero framing for ${p.filename}`}
+                                  title="Adjust hero framing"
+                                >
+                                  <Crop className="h-4 w-4" aria-hidden="true" />
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 className="cursor-pointer text-zinc-500 transition hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1669,6 +1846,21 @@ function GalleryAdminPage() {
           </div>
         </div>
       ) : null}
+
+      <HeroFrameEditor
+        open={heroEditorOpen && Boolean(selected?.thumbnailPhoto)}
+        title={selected?.title}
+        heroSrc={
+          selected?.thumbnailPhoto
+            ? r2PublicUrl(selected.thumbnailPhoto.r2Key) ||
+              r2PhotoPreviewUrl(selected.thumbnailPhoto)
+            : ''
+        }
+        initialFrame={selected?.heroFrame}
+        saving={heroEditorSaving}
+        onCancel={() => !heroEditorSaving && setHeroEditorOpen(false)}
+        onSave={onSaveHeroFrame}
+      />
 
       {deleteConfirmGallery ? (
         <div

@@ -13,6 +13,12 @@ import {
 } from '../../services/galleryApi'
 import RequireGalleryAccess from './RequireGalleryAccess'
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react'
+import {
+  HERO_MAX_BLUR_PX,
+  heroGradientAtScroll,
+  heroImageStyle,
+  normalizeHeroFrame,
+} from './heroFrame'
 
 const LS_DOWNLOADED_PHOTO_IDS = 'ffGalleryDownloadedIds:'
 
@@ -40,9 +46,6 @@ function persistDownloadedPhotoId(galleryId, photoId) {
 }
 
 const LIGHTBOX_MAX_VH = 0.85
-const HERO_MAX_BLUR_PX = 22
-/** How far up the bottom fade travels (in % of hero height) as the user scrolls. */
-const HERO_FADE_PULL_SCROLL_RANGE = 420
 
 const lightboxLayerClass =
   'absolute inset-0 h-full w-full rounded-lg object-contain shadow-2xl transition-opacity duration-150'
@@ -188,7 +191,7 @@ function ZipAllProgressBar({ progress }) {
 
   return (
     <div
-      className="w-full min-w-[12rem] max-w-xs"
+      className="w-full min-w-12rem max-w-xs"
       role="progressbar"
       aria-valuemin={0}
       aria-valuemax={hasTotal ? progress.total : undefined}
@@ -248,6 +251,7 @@ function GalleryViewPage() {
   const [error, setError] = useState('')
   const [galleryTitle, setGalleryTitle] = useState(null)
   const [thumbnailPhoto, setThumbnailPhoto] = useState(null)
+  const [heroFrame, setHeroFrame] = useState(null)
   const [scrollY, setScrollY] = useState(0)
   const [downloadPinned, setDownloadPinned] = useState(false)
   const [lightboxIndex, setLightboxIndex] = useState(null)
@@ -304,6 +308,7 @@ function GalleryViewPage() {
       if (!cancelled) {
         setGalleryTitle(null)
         setThumbnailPhoto(null)
+        setHeroFrame(null)
       }
     })
     ;(async () => {
@@ -320,6 +325,7 @@ function GalleryViewPage() {
         if (!cancelled) {
           setGalleryTitle(info.title)
           setThumbnailPhoto(info.thumbnailPhoto)
+          setHeroFrame(info.heroFrame)
           setLoading(false)
         }
       }
@@ -608,16 +614,9 @@ function GalleryViewPage() {
     ? r2PublicUrl(thumbnailPhoto.r2Key) || r2PhotoPreviewUrl(thumbnailPhoto)
     : ''
   const hasHero = Boolean(heroSrc)
+  const resolvedHeroFrame = normalizeHeroFrame(heroFrame)
   const heroBlurPx = hasHero ? Math.min(scrollY * 0.07, HERO_MAX_BLUR_PX) : 0
-  const heroFadePull = hasHero
-    ? Math.min(scrollY / HERO_FADE_PULL_SCROLL_RANGE, 1)
-    : 0
-  const heroFadeStartPct = 58 - heroFadePull * 50
-  const heroFadeMidPct = Math.min(92, heroFadeStartPct + 18 + heroFadePull * 12)
-  const heroFadeSolidPct = Math.min(98, heroFadeMidPct + 14 + heroFadePull * 8)
-  const heroGradient = hasHero
-    ? `linear-gradient(to bottom, rgba(0,0,0,0.28) 0%, transparent 14%, transparent ${heroFadeStartPct}%, rgba(0,0,0,0.5) ${heroFadeMidPct}%, rgba(0,0,0,0.88) ${heroFadeSolidPct}%, black 100%)`
-    : undefined
+  const heroGradient = hasHero ? heroGradientAtScroll(scrollY) : undefined
 
   const showDownloadAll = !loading && !error && photos.length > 0
 
@@ -632,8 +631,10 @@ function GalleryViewPage() {
             <img
               src={heroSrc}
               alt=""
-              className="h-full w-full scale-105 object-cover object-top"
-              style={{ filter: `blur(${heroBlurPx}px)` }}
+              className="h-full w-full object-cover"
+              style={heroImageStyle(resolvedHeroFrame, {
+                blurPx: heroBlurPx,
+              })}
             />
             <div
               className="absolute inset-0"

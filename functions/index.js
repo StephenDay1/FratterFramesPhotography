@@ -207,7 +207,22 @@ exports.getGalleryPublicInfo = onCall(
       }
     }
 
-    return { title, thumbnailPhoto }
+    let heroFrame = null
+    const rawFrame = data.heroFrame
+    if (rawFrame && typeof rawFrame === 'object') {
+      const focalX = Number(rawFrame.focalX)
+      const focalY = Number(rawFrame.focalY)
+      const scale = Number(rawFrame.scale)
+      if (Number.isFinite(focalX) && Number.isFinite(focalY) && Number.isFinite(scale)) {
+        heroFrame = {
+          focalX: Math.min(100, Math.max(0, focalX)),
+          focalY: Math.min(100, Math.max(0, focalY)),
+          scale: Math.min(2.5, Math.max(1.05, scale)),
+        }
+      }
+    }
+
+    return { title, thumbnailPhoto, heroFrame }
   },
 )
 
