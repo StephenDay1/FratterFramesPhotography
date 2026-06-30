@@ -663,16 +663,19 @@ function GalleryViewPage() {
           <div className={hasHero ? 'bg-black/0' : ''}>
             <div className="mx-auto max-w-6xl px-4 pb-10 md:px-6 md:pb-12">
               <div className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-                <button
-                  type="button"
-                  className="text-left text-sm font-medium tracking-wide text-zinc-200 transition hover:text-white"
-                  onClick={async () => {
-                    await signOut(auth)
-                    navigate('/galleries', { replace: true })
-                  }}
-                >
-                  ← Galleries hub
-                </button>
+                <div className="flex flex-col items-start gap-1">
+                  <button
+                    type="button"
+                    className="text-left text-sm font-medium tracking-wide text-zinc-200 transition hover:text-white hover:cursor-pointer"
+                    onClick={async () => {
+                      await signOut(auth)
+                      navigate('/galleries', { replace: true })
+                    }}
+                  >
+                    ← Galleries hub
+                  </button>
+                  <p className="text-sm text-zinc-200">{photos.length} photos</p>
+                </div>
                 {showDownloadAll ? (
                   <div
                     ref={downloadSlotRef}
