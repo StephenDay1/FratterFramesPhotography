@@ -53,7 +53,8 @@ export function effectiveHeroScale(frame) {
 
 export function heroGradientAtScroll(scrollY = 0) {
   const heroFadePull = Math.min(scrollY / HERO_FADE_PULL_SCROLL_RANGE, 1)
-  const heroFadeStartPct = 58 - heroFadePull * 50
+  // const heroFadeStartPct = 58 - heroFadePull * 50
+  const heroFadeStartPct = 58 - heroFadePull * 25
   const heroFadeMidPct = Math.min(92, heroFadeStartPct + 18 + heroFadePull * 12)
   const heroFadeSolidPct = Math.min(98, heroFadeMidPct + 14 + heroFadePull * 8)
   return `linear-gradient(to bottom, rgba(0,0,0,0.28) 0%, transparent 14%, transparent ${heroFadeStartPct}%, rgba(0,0,0,0.5) ${heroFadeMidPct}%, rgba(0,0,0,0.88) ${heroFadeSolidPct}%, black 100%)`
