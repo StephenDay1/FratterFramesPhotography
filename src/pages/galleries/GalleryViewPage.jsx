@@ -225,7 +225,7 @@ function DownloadAllButton({ busy, busyLabel, onClick }) {
       onClick={onClick}
       disabled={busy}
       aria-busy={busy}
-      className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-white cursor-pointer shadow-lg transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60"
+      className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-600 bg-zinc-900/60 backdrop-blur-xs px-4 py-2 text-sm font-medium text-white cursor-pointer shadow-lg transition hover:bg-zinc-800/50 hover:backdrop-blur-sm disabled:cursor-wait disabled:opacity-60"
     >
       <Download className="h-4 w-4 shrink-0" aria-hidden />
       {busy ? busyLabel || 'Working…' : 'Download all'}
@@ -253,7 +253,6 @@ function GalleryViewPage() {
   const [thumbnailPhoto, setThumbnailPhoto] = useState(null)
   const [heroFrame, setHeroFrame] = useState(null)
   const [scrollY, setScrollY] = useState(0)
-  const [downloadPinned, setDownloadPinned] = useState(false)
   const [lightboxIndex, setLightboxIndex] = useState(null)
   const [downloadBusy, setDownloadBusy] = useState(false)
   const [downloadedPhotoIds, setDownloadedPhotoIds] = useState(() => loadDownloadedPhotoIds(galleryId))
@@ -265,7 +264,6 @@ function GalleryViewPage() {
   const [zipAllProgress, setZipAllProgress] = useState(null)
 
   const galleryTitleRef = useRef(galleryTitle)
-  const downloadSlotRef = useRef(null)
   const zipJobUnsubRef = useRef(() => {})
   const zipJobQueuedAtRef = useRef(0)
   const zipSessionRef = useRef(0)
@@ -336,25 +334,11 @@ function GalleryViewPage() {
   }, [galleryId])
 
   useEffect(() => {
-    const onScroll = () => {
-      setScrollY(window.scrollY)
-      const slot = downloadSlotRef.current
-      if (slot) {
-        setDownloadPinned(slot.getBoundingClientRect().top < 12)
-      }
-    }
+    const onScroll = () => setScrollY(window.scrollY)
     onScroll()
     window.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('resize', onScroll)
-    return () => {
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', onScroll)
-    }
-  }, [galleryId, loading, error, photos.length])
-
-  useEffect(() => {
-    queueMicrotask(() => setDownloadPinned(false))
-  }, [galleryId])
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -643,6 +627,22 @@ function GalleryViewPage() {
           </div>
         ) : null}
 
+        {showDownloadAll ? (
+          <div className="pointer-events-none fixed right-0 top-0 z-30 p-3">
+            <div className="pointer-events-auto mx-auto flex max-w-6xl justify-end px-2">
+              <div className="flex flex-col items-end gap-2">
+                <ZipDownloadAllControls
+                  busy={zipAllBusy}
+                  busyLabel={zipAllMessage}
+                  onClick={startZipAllDownload}
+                  progress={zipAllProgress}
+                  error={zipAllError}
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="relative z-10">
           <div className="mx-auto max-w-6xl px-4 md:px-6">
             {hasHero ? (
@@ -662,51 +662,19 @@ function GalleryViewPage() {
 
           <div className={hasHero ? 'bg-black/0' : ''}>
             <div className="mx-auto max-w-6xl px-4 pb-10 md:px-6 md:pb-12">
-              <div className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-                <div className="flex flex-col items-start gap-1">
-                  <button
-                    type="button"
-                    className="text-left text-sm font-medium tracking-wide text-zinc-200 transition hover:text-white hover:cursor-pointer"
-                    onClick={async () => {
-                      await signOut(auth)
-                      navigate('/galleries', { replace: true })
-                    }}
-                  >
-                    ← Galleries hub
-                  </button>
-                  <p className="text-sm text-zinc-200">{photos.length} photos</p>
-                </div>
-                {showDownloadAll ? (
-                  <div
-                    ref={downloadSlotRef}
-                    className={`ml-auto flex flex-col items-end gap-2 ${downloadPinned ? 'invisible' : ''}`}
-                  >
-                    <ZipDownloadAllControls
-                      busy={zipAllBusy}
-                      busyLabel={zipAllMessage}
-                      onClick={startZipAllDownload}
-                      progress={zipAllProgress}
-                      error={zipAllError}
-                    />
-                  </div>
-                ) : null}
+              <div className="mb-6 flex flex-col items-start gap-1">
+                <button
+                  type="button"
+                  className="text-left text-sm font-medium tracking-wide text-zinc-200 transition hover:text-white hover:cursor-pointer"
+                  onClick={async () => {
+                    await signOut(auth)
+                    navigate('/galleries', { replace: true })
+                  }}
+                >
+                  ← Galleries hub
+                </button>
+                <p className="text-sm text-zinc-200">{photos.length} photos</p>
               </div>
-
-              {showDownloadAll && downloadPinned ? (
-                <div className="pointer-events-none fixed inset-x-0 top-0 z-30 pt-3 md:pt-4">
-                  <div className="pointer-events-auto mx-auto flex max-w-6xl justify-end px-4 md:px-6">
-                    <div className="flex flex-col items-end gap-2">
-                      <ZipDownloadAllControls
-                        busy={zipAllBusy}
-                        busyLabel={zipAllMessage}
-                        onClick={startZipAllDownload}
-                        progress={zipAllProgress}
-                        error={zipAllError}
-                      />
-                    </div>
-                  </div>
-                </div>
-              ) : null}
 
               {loading && <p className="text-sm text-zinc-400">Loading gallery…</p>}
               {error && (
@@ -738,7 +706,7 @@ function GalleryViewPage() {
                           <button
                             type="button"
                             onClick={() => setLightboxIndex(index)}
-                            className="w-full cursor-pointer overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 text-left outline-none ring-white/0 transition hover:border-zinc-600 focus-visible:ring-2 focus-visible:ring-white"
+                            className="w-full cursor-pointer overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 text-left outline-none ring-white/0 transition focus-visible:ring-2 focus-visible:ring-white"
                           >
                             <img
                               src={gridSrc || href}

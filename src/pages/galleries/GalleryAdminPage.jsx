@@ -1428,14 +1428,23 @@ function GalleryAdminPage() {
                       >
                         {copyStatus ? <CopyCheck className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
                       </button>
-                      <button
+                      {/* <button
                         type="button"
                         className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
                         aria-label="View gallery"
                         title="View gallery"
+                      > */}
+                      <Link 
+                        to={`/galleries/${selected.id}`}
+                        target="_blank"
+                        // className="text-xs"
+                        className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
+                        aria-label="View gallery"
+                        title="View gallery"
                       >
-                        <Link to={`/galleries/${selected.id}`} target="_blank" className="text-xs"><SquareArrowOutUpRight className="h-4 w-4" aria-hidden="true" /></Link>
-                      </button>
+                        <SquareArrowOutUpRight className="h-4 w-4" aria-hidden="true" />
+                      </Link>
+                      {/* </button> */}
                     </div>
                     <p className="mt-1 text-sm text-zinc-500">
                       Client access key: <span className="font-mono text-zinc-300">{selected.clientAccessKey}</span>
