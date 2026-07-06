@@ -55,13 +55,9 @@ function randomUploadToken() {
  */
 export function buildGalleryPhotoUploadBasename({ galleryTitle, sequenceOneBased, file }) {
   const slug = sanitizeGallerySlug(galleryTitle)
-  const n =
-    Number.isFinite(sequenceOneBased) && sequenceOneBased > 0
-      ? Math.floor(sequenceOneBased)
-      : 1
   const token = randomUploadToken()
   const ext = extensionFromFile(file)
-  const basename = `${slug}-${n}-${token}${ext}`
+  const basename = `${slug}-${token}${ext}`
   return sanitizeObjectSegment(basename)
 }
 

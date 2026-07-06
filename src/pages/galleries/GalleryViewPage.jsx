@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { signOut } from 'firebase/auth'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import { triggerPresignedBrowserDownload } from '../../lib/triggerPresignedDownload'
@@ -218,6 +218,14 @@ function ZipAllProgressBar({ progress }) {
   )
 }
 
+const floatingCornerBtnClass = 'inline-flex items-center justify-center gap-2 rounded-full border border-zinc-600 bg-zinc-900/60 backdrop-blur-xs px-4 py-2 text-sm font-medium text-white cursor-pointer shadow-lg transition hover:bg-zinc-800/50 hover:backdrop-blur-sm disabled:cursor-wait disabled:opacity-60'
+
+const riseInClass = 'motion-safe:animate-rise-in'
+
+function riseDelay(ms) {
+  return { animationDelay: `${ms}ms` }
+}
+
 function DownloadAllButton({ busy, busyLabel, onClick }) {
   return (
     <button
@@ -225,7 +233,7 @@ function DownloadAllButton({ busy, busyLabel, onClick }) {
       onClick={onClick}
       disabled={busy}
       aria-busy={busy}
-      className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-600 bg-zinc-900/60 backdrop-blur-xs px-4 py-2 text-sm font-medium text-white cursor-pointer shadow-lg transition hover:bg-zinc-800/50 hover:backdrop-blur-sm disabled:cursor-wait disabled:opacity-60"
+      className={floatingCornerBtnClass}
     >
       <Download className="h-4 w-4 shrink-0" aria-hidden />
       {busy ? busyLabel || 'Working…' : 'Download all'}
@@ -245,7 +253,10 @@ function ZipDownloadAllControls({ busy, busyLabel, onClick, progress, error }) {
 
 function GalleryViewPage() {
   const { galleryId } = useParams()
+  const location = useLocation()
   const navigate = useNavigate()
+  const fromAdmin = location.state?.fromAdmin === true
+  const [isAdmin, setIsAdmin] = useState(false)
   const [photos, setPhotos] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -271,6 +282,22 @@ function GalleryViewPage() {
   useEffect(() => {
     galleryTitleRef.current = galleryTitle
   }, [galleryTitle])
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setIsAdmin(false)
+        return
+      }
+      try {
+        const id = await user.getIdTokenResult()
+        setIsAdmin(id.claims?.admin === true)
+      } catch {
+        setIsAdmin(false)
+      }
+    })
+    return () => unsub()
+  }, [])
 
   useEffect(() => {
     zipSessionRef.current += 1
@@ -603,6 +630,7 @@ function GalleryViewPage() {
   const heroGradient = hasHero ? heroGradientAtScroll(scrollY) : undefined
 
   const showDownloadAll = !loading && !error && photos.length > 0
+  const showAdminBack = fromAdmin && isAdmin
 
   return (
     <RequireGalleryAccess galleryId={galleryId}>
@@ -627,6 +655,23 @@ function GalleryViewPage() {
           </div>
         ) : null}
 
+        {showAdminBack ? (
+          <div className="pointer-events-none fixed left-0 top-0 z-30 p-3">
+            <div className="pointer-events-auto mx-auto flex max-w-6xl justify-start px-2">
+              <button
+                type="button"
+                className={floatingCornerBtnClass}
+                onClick={() =>
+                  navigate('/galleries/admin', { state: { selectedGalleryId: galleryId } })
+                }
+              >
+                <ChevronLeft className="h-4 w-4 shrink-0" aria-hidden />
+                Back to admin
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {showDownloadAll ? (
           <div className="pointer-events-none fixed right-0 top-0 z-30 p-3">
             <div className="pointer-events-auto mx-auto flex max-w-6xl justify-end px-2">
@@ -643,8 +688,11 @@ function GalleryViewPage() {
           </div>
         ) : null}
 
-        <div className="relative z-10">
-          <div className="mx-auto max-w-6xl px-4 md:px-6">
+        {!loading ? (<div key={`${galleryId}-${loading ? 'load' : 'ready'}`} className="relative z-10">
+          <div
+            className={`mx-auto max-w-6xl px-4 md:px-6 ${riseInClass}`}
+            style={riseDelay(0)}
+          >
             {hasHero ? (
               <div className="flex min-h-[min(48vh,400px)] flex-col justify-end pb-2 pt-8 md:min-h-[min(72vh,640px)] md:pb-4 md:pt-10">
                 <h1 className="max-w-4xl text-3xl font-semibold tracking-tight text-white drop-shadow-[0_2px_24px_rgba(0,0,0,0.85)] md:text-5xl">
@@ -662,7 +710,10 @@ function GalleryViewPage() {
 
           <div className={hasHero ? 'bg-black/0' : ''}>
             <div className="mx-auto max-w-6xl px-4 pb-10 md:px-6 md:pb-12">
-              <div className="mb-6 flex flex-col items-start gap-1">
+              <div
+                className={`mb-6 flex flex-col items-start gap-1 ${riseInClass}`}
+                style={riseDelay(60)}
+              >
                 <button
                   type="button"
                   className="text-left text-sm font-medium tracking-wide text-zinc-200 transition hover:text-white hover:cursor-pointer"
@@ -676,26 +727,36 @@ function GalleryViewPage() {
                 <p className="text-sm text-zinc-200">{photos.length} photos</p>
               </div>
 
-              {loading && <p className="text-sm text-zinc-400">Loading gallery…</p>}
+              {loading && (
+                <p className={`text-sm text-zinc-400 ${riseInClass}`} style={riseDelay(100)}>
+                  Loading gallery…
+                </p>
+              )}
               {error && (
-                <p className="rounded-lg border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-100">
+                <p
+                  className={`rounded-lg border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-100 ${riseInClass}`}
+                  style={riseDelay(100)}
+                >
                   {error}
                 </p>
               )}
 
               {!loading && !error && photos.length === 0 && (
-                <>
+                <div className={riseInClass} style={riseDelay(100)}>
                   <p className="text-sm text-zinc-400">
                     No photo records yet. Your photographer still needs to upload photos to the gallery.
                   </p>
                   <p className="text-sm text-zinc-400">
                     If you think this is an error, please contact your photographer.
                   </p>
-                </>
+                </div>
               )}
 
               {!loading && !error && photos.length > 0 && (
-                <div className="columns-2 gap-3 sm:columns-4 lg:columns-6">
+                <div
+                  className={`columns-2 gap-3 sm:columns-4 lg:columns-6 ${riseInClass}`}
+                  style={riseDelay(120)}
+                >
                   {photos.map((p, index) => {
                     const href = r2PublicUrl(p.r2Key)
                     const gridSrc = r2PhotoPreviewUrl(p) || href
@@ -728,6 +789,7 @@ function GalleryViewPage() {
             </div>
           </div>
         </div>
+        ) : null}
 
         {active && activeHasMedia && (
           <div

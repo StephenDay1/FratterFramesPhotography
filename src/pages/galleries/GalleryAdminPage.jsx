@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
   CheckSquare,
@@ -338,6 +338,7 @@ function GalleryUploadProgress({
 }
 
 function GalleryAdminPage() {
+  const location = useLocation()
   const navigate = useNavigate()
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
@@ -487,9 +488,14 @@ function GalleryAdminPage() {
       try {
         const rows = await listGalleries()
         if (cancelled) return
+        const returnGalleryId = location.state?.selectedGalleryId
+        const preferredId =
+          typeof returnGalleryId === 'string'
+            ? returnGalleryId
+            : selectedId
         const nextSelectedId =
-          selectedId && rows.some((r) => r.id === selectedId)
-            ? selectedId
+          preferredId && rows.some((r) => r.id === preferredId)
+            ? preferredId
             : rows[0]?.id ?? null
         const { galleries: hydrated, photos: photoRows } =
           await listGalleriesWithSelectedPhotos(nextSelectedId, rows)
@@ -1211,7 +1217,7 @@ function GalleryAdminPage() {
         </div>
       )}
       <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6 lg:h-full lg:min-h-0 lg:flex-row lg:overflow-hidden">
-        <aside className="flex w-full shrink-0 flex-col lg:min-h-0 lg:w-72">
+        <aside className="flex w-full shrink-0 flex-col lg:min-h-0 lg:w-72 border-r border-zinc-800 pr-6">
           <button
             type="button"
             className="text-left text-sm text-zinc-400 transition hover:text-white"
@@ -1300,6 +1306,7 @@ function GalleryAdminPage() {
             ) : null}
           </div>
 
+          {/* Gallery List */}
           <div className="scrollbar-hide mt-6 space-y-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {galleries.map((g) => {
               const sidebarThumbUrl = r2PhotoPreviewUrl(g.thumbnailPhoto)
@@ -1360,6 +1367,7 @@ function GalleryAdminPage() {
             )}
           </div>
 
+          {/* New Gallery Form */}
           <form className="mt-6 space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4" onSubmit={onCreateGallery}>
             <h2 className="text-sm font-semibold">New gallery</h2>
             <input
@@ -1385,15 +1393,17 @@ function GalleryAdminPage() {
           </form>
         </aside>
 
-        <section className="flex min-w-0 flex-col lg:min-h-0 lg:flex-1 lg:overflow-hidden">
+        {/* Gallery Details */}
+        <section className="flex min-w-0 max-w-full flex-col lg:min-h-0 lg:flex-1 lg:overflow-hidden">
           {!selected ? (
             <p className="text-sm text-zinc-400">Select or create a gallery.</p>
           ) : (
             <>
-              <header className="border-b border-zinc-800 pb-6">
-                <div className="flex gap-4">
+              <div className="mt-8 grid grid-cols-1 gap-8 lg:auto-rows-fr lg:grid-cols-[fit-content(min(28rem,50%))_1fr] lg:min-h-0 lg:flex-1 lg:overflow-hidden">
+                {/* Left Column */}
+                <div className="flex min-w-0 flex-col lg:min-h-0 lg:h-full lg:overflow-hidden">
                   {selected?.thumbnailPhoto ? (
-                    <div className="relative h-22 w-32 shrink-0 overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-zinc-700 sm:w-36">
+                    <div className="relative mb-3 w-full overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-zinc-700 lg:min-h-16 lg:shrink">
                       <img
                         src={
                           r2PublicUrl(selected.thumbnailPhoto.r2Key) ||
@@ -1415,6 +1425,7 @@ function GalleryAdminPage() {
                       </button>
                     </div>
                   ) : null}
+                <div className="flex shrink-0 gap-4">
                   <div className="min-w-0 flex-1">
                     <h2 className="text-2xl font-semibold">{selected.title || 'Untitled'}</h2>
                     <div className="mt-1 flex flex-wrap items-center gap-3">
@@ -1434,10 +1445,9 @@ function GalleryAdminPage() {
                         aria-label="View gallery"
                         title="View gallery"
                       > */}
-                      <Link 
+                      <Link
                         to={`/galleries/${selected.id}`}
-                        target="_blank"
-                        // className="text-xs"
+                        state={{ fromAdmin: true }}
                         className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
                         aria-label="View gallery"
                         title="View gallery"
@@ -1451,15 +1461,10 @@ function GalleryAdminPage() {
                     </p>
                   </div>
                 </div>
-              </header>
 
-              <div className="mt-8 grid grid-cols-1 gap-8 lg:auto-rows-fr lg:grid-cols-2 lg:min-h-0 lg:flex-1 lg:overflow-hidden">
-                <div className="lg:min-h-0">
-                  <h3 className="text-sm font-semibold text-zinc-200">Register uploads</h3>
-                  <p className="mt-2 text-xs text-zinc-500">
-                    File selection now uploads directly to R2 using a Cloudflare Worker presigned
-                    URL endpoint, then saves Firestore metadata.
-                  </p>
+                {/* Register Uploads */}
+                <div className="mt-8 shrink-0 lg:mt-auto lg:min-h-0">
+                  <h3 className="text-sm font-semibold text-zinc-200 pt-10">Register uploads</h3>
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -1530,7 +1535,11 @@ function GalleryAdminPage() {
                         onChange={onParallelUploadsChange}
                       />
                     ) : null}
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Using parallel uploads may improve upload speed on fast networks.  On slower networks, it may be better to disable parallel uploads.
+                    </p>
                   </div>
+                </div>
 
                   {/* <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-950/40">
                     <button
@@ -1598,7 +1607,7 @@ function GalleryAdminPage() {
                   </div> */}
                 </div>
 
-                <div className="flex flex-col lg:min-h-0 lg:h-full">
+                <div className="flex min-w-0 flex-col lg:min-h-0 lg:h-full">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-zinc-200">
                       {photos.length ? `${photos.length} photos` : 'No photos yet'} ·{' '}
