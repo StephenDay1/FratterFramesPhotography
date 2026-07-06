@@ -1300,7 +1300,7 @@ function GalleryAdminPage() {
             ) : null}
           </div>
 
-          <div className="mt-6 space-y-2 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+          <div className="scrollbar-hide mt-6 space-y-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {galleries.map((g) => {
               const sidebarThumbUrl = r2PhotoPreviewUrl(g.thumbnailPhoto)
               return (
@@ -1676,7 +1676,7 @@ function GalleryAdminPage() {
                   </p>
                   )}
                   <ul
-                    className={`mt-4 space-y-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto${
+                    className={`scrollbar-hide mt-4 space-y-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto${
                       selectionMode ? ' select-none' : ''
                     }`}
                     onPointerMove={selectionMode && !busy ? onPhotoListPointerMove : undefined}
