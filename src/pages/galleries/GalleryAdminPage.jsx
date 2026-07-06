@@ -1,5 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
+import TransitionLink from '../../components/TransitionLink'
+import { useTransitionNavigate } from '../../hooks/useTransitionNavigate'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
   CheckSquare,
@@ -338,7 +340,7 @@ function GalleryUploadProgress({
 }
 
 function GalleryAdminPage() {
-  const navigate = useNavigate()
+  const navigate = useTransitionNavigate()
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
   const [viewerBlocked, setViewerBlocked] = useState(false)
@@ -613,9 +615,9 @@ function GalleryAdminPage() {
         >
           Sign out
         </button>
-        <Link className="mt-4 block text-sm text-zinc-400 underline" to="/admin">
+        <TransitionLink className="mt-4 block text-sm text-zinc-400 underline" to="/admin">
           Back to admin login
-        </Link>
+        </TransitionLink>
       </main>
     )
   }
@@ -1300,7 +1302,7 @@ function GalleryAdminPage() {
             ) : null}
           </div>
 
-          <div className="mt-6 space-y-2 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+          <div className="scrollbar-hide mt-6 space-y-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {galleries.map((g) => {
               const sidebarThumbUrl = r2PhotoPreviewUrl(g.thumbnailPhoto)
               return (
@@ -1676,7 +1678,7 @@ function GalleryAdminPage() {
                   </p>
                   )}
                   <ul
-                    className={`mt-4 space-y-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto${
+                    className={`scrollbar-hide mt-4 space-y-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto${
                       selectionMode ? ' select-none' : ''
                     }`}
                     onPointerMove={selectionMode && !busy ? onPhotoListPointerMove : undefined}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
+import { useTransitionNavigate } from '../../hooks/useTransitionNavigate'
 import { signOut } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
 import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
@@ -245,7 +246,7 @@ function ZipDownloadAllControls({ busy, busyLabel, onClick, progress, error }) {
 
 function GalleryViewPage() {
   const { galleryId } = useParams()
-  const navigate = useNavigate()
+  const navigate = useTransitionNavigate()
   const [photos, setPhotos] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

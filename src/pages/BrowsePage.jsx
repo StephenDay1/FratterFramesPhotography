@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import TransitionLink from '../components/TransitionLink'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
 const GALLERY = [
@@ -99,12 +99,12 @@ function BrowsePage() {
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-10">
-        <Link
+        <TransitionLink
           to="/"
           className="mb-8 inline-block text-sm font-medium tracking-wide text-zinc-300 transition hover:text-white"
         >
           Back to Home
-        </Link>
+        </TransitionLink>
 
         <h1 className="mb-8 text-3xl font-semibold tracking-tight md:text-4xl">Browse my work</h1>
 

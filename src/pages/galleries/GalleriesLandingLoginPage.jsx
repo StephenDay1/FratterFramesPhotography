@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
+import TransitionLink from '../../components/TransitionLink'
+import { useTransitionNavigate } from '../../hooks/useTransitionNavigate'
 import { signInWithCustomToken } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
 import { useRedirectIfAuthenticated } from '../../lib/authRedirect'
@@ -7,7 +9,7 @@ import { setStoredGalleryTitle, verifyGalleryKeyCallable } from '../../services/
 
 function GalleriesHubPage() {
   const location = useLocation()
-  const navigate = useNavigate()
+  const navigate = useTransitionNavigate()
   const checkingSession = useRedirectIfAuthenticated()
   const [clientGalleryId, setClientGalleryId] = useState(() => {
     const fromGalleryId = location.state?.from
@@ -45,12 +47,12 @@ function GalleriesHubPage() {
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-6 py-12">
-        <Link
+        <TransitionLink
           to="/"
           className="mb-8 inline-block text-sm font-medium tracking-wide text-zinc-300 transition hover:text-white"
         >
           Back to Home
-        </Link>
+        </TransitionLink>
 
         <header className="mb-10">
           <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Fratter Frame Galleries</h1>
@@ -98,9 +100,9 @@ function GalleriesHubPage() {
               </button>
             </form>
             <p className="mt-5 text-sm text-zinc-400">
-              <Link className="hover:text-white" to="/admin">
+              <TransitionLink className="hover:text-white" to="/admin">
                 Click here for the admin login
-              </Link>
+              </TransitionLink>
             </p>
           </section>
         </div>

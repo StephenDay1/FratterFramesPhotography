@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useTransitionNavigate } from '../hooks/useTransitionNavigate'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth } from './firebase'
 
@@ -29,7 +29,7 @@ export async function getAuthenticatedRedirectPath(user) {
 
 /** Redirects already-signed-in users away from login/hub pages. */
 export function useRedirectIfAuthenticated() {
-  const navigate = useNavigate()
+  const navigate = useTransitionNavigate()
   const [checking, setChecking] = useState(true)
 
   useEffect(() => {

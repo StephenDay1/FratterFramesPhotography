@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import TransitionLink from '../../components/TransitionLink'
+import { useTransitionNavigate } from '../../hooks/useTransitionNavigate'
 import { signInWithEmailAndPassword } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
 import { useRedirectIfAuthenticated } from '../../lib/authRedirect'
 
 function AdminLoginPage() {
-  const navigate = useNavigate()
+  const navigate = useTransitionNavigate()
   const checkingSession = useRedirectIfAuthenticated()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -37,12 +38,12 @@ function AdminLoginPage() {
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto flex min-h-screen w-full max-w-xl flex-col px-6 py-12">
-        <Link
+        <TransitionLink
           to="/"
           className="mb-8 inline-block text-sm font-medium tracking-wide text-zinc-300 transition hover:text-white"
         >
           Back to Home
-        </Link>
+        </TransitionLink>
 
         <header className="mb-10">
           <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Admin Login</h1>

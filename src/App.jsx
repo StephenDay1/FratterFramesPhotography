@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import AboutMePage from './pages/AboutMePage'
 import BrowsePage from './pages/BrowsePage'
 import ContactMePage from './pages/ContactMePage'
@@ -11,25 +11,23 @@ import AdminLoginPage from './pages/galleries/AdminLoginPage'
 import GalleryAdminPage from './pages/galleries/GalleryAdminPage'
 import GalleryViewPage from './pages/galleries/GalleryViewPage'
 
+const router = createBrowserRouter([
+  { path: '/', element: <HomePage /> },
+  { path: '/browse', element: <BrowsePage /> },
+  { path: '/family-photos', element: <FamilyPhotosPage /> },
+  { path: '/pricing', element: <PricingPage /> },
+  { path: '/about-me', element: <AboutMePage /> },
+  { path: '/portraits', element: <PortraitsPage /> },
+  { path: '/contact-me', element: <ContactMePage /> },
+  { path: '/galleries', element: <GalleriesHubPage /> },
+  { path: '/admin', element: <AdminLoginPage /> },
+  { path: '/galleries/admin', element: <GalleryAdminPage /> },
+  { path: '/galleries/:galleryId', element: <GalleryViewPage /> },
+  { path: '*', element: <Navigate to="/" replace /> },
+])
+
 function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/browse" element={<BrowsePage />} />
-        <Route path="/family-photos" element={<FamilyPhotosPage />} />
-        <Route path="/pricing" element={<PricingPage />} />
-        <Route path="/about-me" element={<AboutMePage />} />
-        <Route path="/portraits" element={<PortraitsPage />} />
-        <Route path="/contact-me" element={<ContactMePage />} />
-        <Route path="/galleries" element={<GalleriesHubPage />} />
-        <Route path="/admin" element={<AdminLoginPage />} />
-        <Route path="/galleries/admin" element={<GalleryAdminPage />} />
-        <Route path="/galleries/:galleryId" element={<GalleryViewPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
-  )
+  return <RouterProvider router={router} />
 }
 
 export default App

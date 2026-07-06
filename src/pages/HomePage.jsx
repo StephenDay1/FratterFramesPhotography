@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import TransitionLink from '../components/TransitionLink'
 
 function HomePage() {
   useEffect(() => {
@@ -102,7 +102,7 @@ function HomePage() {
               className={`relative ${tile.mobileHalf ? 'col-span-1' : 'col-span-2'} overflow-hidden rounded-2xl md:min-h-0 ${tile.coverText ? 'group' : ''} ${tile.className}`}
             >
               {tile.type === 'title' ? (
-                <Link to={tile.redirectUrl}>
+                <TransitionLink to={tile.redirectUrl}>
                 <div className="flex h-full items-center justify-center flex-col bg-zinc-900 p-6">
                   <h1 className="w-full text-center text-xl font-semibold tracking-tight md:text-2xl">
                     {tile.title}
@@ -111,7 +111,7 @@ function HomePage() {
                     {tile.description}
                   </p>
                 </div>
-                </Link>
+                </TransitionLink>
               ) : (
                 <>
                   <img
@@ -121,12 +121,12 @@ function HomePage() {
                     loading="lazy"
                   />
                   {tile.coverText && (
-                    <Link
+                    <TransitionLink
                       to={tile.redirectUrl}
                       className="absolute inset-0 flex items-center justify-center bg-black/45 p-4 text-center text-lg font-semibold tracking-tight text-white"
                     >
                       {tile.coverText}
-                    </Link>
+                    </TransitionLink>
                   )}
                 </>
               )}
