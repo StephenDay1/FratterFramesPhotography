@@ -1217,7 +1217,7 @@ function GalleryAdminPage() {
         </div>
       )}
       <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6 lg:h-full lg:min-h-0 lg:flex-row lg:overflow-hidden">
-        <aside className="flex w-full shrink-0 flex-col lg:min-h-0 lg:w-72 border-r border-zinc-800 pr-6">
+        <aside className="flex w-full shrink-0 flex-col lg:min-h-0 lg:w-72">
           <button
             type="button"
             className="text-left text-sm text-zinc-400 transition hover:text-white"
