@@ -59,7 +59,7 @@ import {
   writeParallelUploadPreference,
 } from './galleryUploadQueue'
 import HeroFrameEditor from './HeroFrameEditor'
-import { heroImageStyle, HERO_DEFAULT_FRAME, normalizeHeroFrame } from './heroFrame'
+import { heroGradientAtScroll, heroImageStyle, HERO_DEFAULT_FRAME, normalizeHeroFrame } from './heroFrame'
 
 async function userIsGalleryViewer(user) {
   if (!user) return false
@@ -1395,7 +1395,7 @@ function GalleryAdminPage() {
             ← Sign out
           </button>
           <div className="mt-6 flex items-center justify-between gap-3">
-            <h1 className="text-lg font-semibold">Admin</h1>
+            <h1 className="text-lg font-semibold">Admin Panel</h1>
             {/* <button
               type="button"
               className="text-xs font-medium text-zinc-400 cursor-pointer transition hover:text-white"
@@ -1404,9 +1404,6 @@ function GalleryAdminPage() {
               Sign out
             </button> */}
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-            Manage your galleries and photos here.  Storage is running on Cloudflare R2 with Firebase Firestore for metadata.
-          </p>
           <div ref={storageInfoRef} className="relative mt-3">
             <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-zinc-400">
               <span>Total storage used:</span>
@@ -1569,19 +1566,24 @@ function GalleryAdminPage() {
                 {/* Left Column */}
                 <div className="flex min-w-0 flex-col lg:min-h-0 lg:h-full lg:overflow-hidden">
                   {selected?.thumbnailPhoto ? (
-                    <div className="relative mb-3 w-full overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-zinc-700 lg:min-h-16 lg:shrink">
+                    <div className="relative mb-3 w-full shrink-0 overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-zinc-700 aspect-[1440/738]">
                       <img
                         src={
                           r2PublicUrl(selected.thumbnailPhoto.r2Key) ||
                           r2PhotoPreviewUrl(selected.thumbnailPhoto)
                         }
                         alt=""
-                        className="h-full w-full object-cover"
+                        className="absolute inset-0 h-full w-full object-cover"
                         style={heroImageStyle(normalizeHeroFrame(selected.heroFrame))}
+                      />
+                      <div
+                        className="absolute inset-0"
+                        style={{ background: heroGradientAtScroll(0) }}
+                        aria-hidden
                       />
                       <button
                         type="button"
-                        className="absolute right-1 bottom-1 cursor-pointer rounded-md bg-black/75 p-1.5 text-zinc-200 transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        className="absolute right-1 bottom-1 z-10 cursor-pointer rounded-md bg-black/75 p-1.5 text-zinc-200 transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                         onClick={() => setHeroEditorOpen(true)}
                         disabled={busy || heroEditorSaving}
                         aria-label="Edit cover photo"
@@ -2073,6 +2075,7 @@ function GalleryAdminPage() {
       <HeroFrameEditor
         open={heroEditorOpen && Boolean(selected?.thumbnailPhoto)}
         title={selected?.title}
+        photos={photos}
         heroSrc={
           selected?.thumbnailPhoto
             ? r2PublicUrl(selected.thumbnailPhoto.r2Key) ||

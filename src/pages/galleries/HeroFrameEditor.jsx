@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { r2PhotoPreviewUrl, r2PublicUrl } from '../../lib/r2PublicUrl'
 import {
   clampHeroFrame,
   containedFocalMarkerPosition,
@@ -7,15 +8,19 @@ import {
   heroGradientAtScroll,
   heroImageStyle,
   HERO_DEFAULT_FRAME,
+  HERO_DESKTOP_VIEWPORT,
   HERO_MAX_SCALE,
   HERO_MIN_SCALE,
+  HERO_MOBILE_VIEWPORT,
   normalizeHeroFrame,
 } from './heroFrame'
 
-function HeroBackground({ heroSrc, frame, blurPx = 0, viewportWidth, viewportHeight }) {
+const HERO_SECTION_RATIO = { mobile: 0.8, desktop: 0.82 }
+
+function HeroBackground({ heroSrc, frame, blurPx = 0 }) {
   if (!heroSrc) return null
   return (
-    <>
+    <div className="relative h-full w-full">
       <img
         src={heroSrc}
         alt=""
@@ -27,17 +32,71 @@ function HeroBackground({ heroSrc, frame, blurPx = 0, viewportWidth, viewportHei
         className="absolute inset-0"
         style={{ background: heroGradientAtScroll(0) }}
       />
-    </>
+    </div>
   )
 }
 
-function HeroGalleryPreview({ variant, title, heroSrc, frame }) {
+function PreviewPhotoMasonry({ photos, variant, scale }) {
+  const columnClass = variant === 'mobile' ? 'columns-2' : 'columns-6'
+  const gap = Math.max(2, Math.round(12 * scale))
+  const itemMb = Math.max(2, Math.round(12 * scale))
+  const rounded = Math.max(3, Math.round(16 * scale))
+  const previewPhotos = photos.slice(0, 18)
+
+  if (!previewPhotos.length) {
+    return (
+      <div className={columnClass} style={{ columnGap: gap }}>
+        {Array.from({ length: variant === 'mobile' ? 4 : 6 }, (_, i) => (
+          <div key={i} className="break-inside-avoid" style={{ marginBottom: itemMb }}>
+            <div
+              className="aspect-3/4 border border-zinc-800 bg-zinc-900/80"
+              style={{ borderRadius: rounded }}
+            />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className={columnClass} style={{ columnGap: gap }}>
+      {previewPhotos.map((p) => {
+        const src = r2PhotoPreviewUrl(p) || r2PublicUrl(p?.r2Key)
+        if (!src) return null
+        return (
+          <div key={p.id} className="break-inside-avoid" style={{ marginBottom: itemMb }}>
+            <div
+              className="overflow-hidden border border-zinc-800 bg-zinc-900"
+              style={{ borderRadius: rounded }}
+            >
+              <img
+                src={src}
+                alt=""
+                className="w-full object-cover"
+                loading="lazy"
+                draggable={false}
+              />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function HeroGalleryPreview({ variant, title, heroSrc, frame, photos = [] }) {
   const isMobile = variant === 'mobile'
-  const viewportWidth = isMobile ? 390 : 1440
-  const viewportHeight = isMobile ? 844 : 900
-  const frameWidth = isMobile ? 108 : 200
-  const frameHeight = isMobile ? 234 : 130
-  const titleClass = isMobile ? 'text-[9px] leading-tight' : 'text-xs leading-tight'
+  const viewport = isMobile ? HERO_MOBILE_VIEWPORT : HERO_DESKTOP_VIEWPORT
+  const heroSectionRatio = isMobile ? HERO_SECTION_RATIO.mobile : HERO_SECTION_RATIO.desktop
+  const scale = isMobile ? 110 / viewport.width : 250 / viewport.width
+  const frameWidth = Math.round(viewport.width * scale)
+  const frameHeight = Math.round(viewport.height * scale)
+  const heroHeight = Math.round(frameHeight * heroSectionRatio)
+  const padX = Math.max(3, Math.round(16 * scale))
+  const padBottomTitle = Math.max(2, Math.round(8 * scale))
+  const titleClass = isMobile
+    ? 'text-[8px] leading-tight md:text-[8px]'
+    : 'text-[10px] leading-tight'
 
   return (
     <div className="flex min-w-0 flex-col items-center gap-1 pointer-events-none select-none">
@@ -51,33 +110,46 @@ function HeroGalleryPreview({ variant, title, heroSrc, frame }) {
         style={{ width: frameWidth, height: frameHeight }}
       >
         <div className="absolute inset-0 overflow-hidden">
-          <HeroBackground
-            heroSrc={heroSrc}
-            frame={frame}
-            viewportWidth={viewportWidth}
-            viewportHeight={viewportHeight}
-          />
+          <HeroBackground heroSrc={heroSrc} frame={frame} />
         </div>
-        <div className="absolute inset-x-0 bottom-0 z-10">
-          <div className="flex flex-col justify-end px-1.5 pb-0.5">
-            <h3
-              className={`max-w-full font-semibold tracking-tight text-white drop-shadow-[0_1px_8px_rgba(0,0,0,0.85)] ${titleClass}`}
-            >
-              {title || 'Your Gallery'}
-            </h3>
-          </div>
-          <div className="px-1.5 py-1">
-            <div className="grid grid-cols-4 gap-0.5">
-              {isMobile ? 
-              [0,1,2,3,4,5,6,7].map((i) => (
-                <div key={i} className="aspect-3/4 rounded-sm bg-zinc-800/80" />
-              )) : 
-              [0,1,2,3].map((i) => (
-                <div key={i} className="aspect-4/3 rounded-sm bg-zinc-800/80" />
-              ))}
-            </div>
-          </div>
+
+        <div
+          className="absolute inset-x-0 top-0 z-10 flex flex-col justify-end"
+          style={{
+            height: heroHeight,
+            paddingLeft: padX,
+            paddingRight: padX,
+            paddingBottom: padBottomTitle,
+          }}
+        >
+          <h3
+            className={`max-w-full font-semibold tracking-tight text-white drop-shadow-[0_2px_24px_rgba(0,0,0,0.85)] ${titleClass}`}
+          >
+            {title || 'Your Gallery'}
+          </h3>
         </div>
+
+        <div
+          className="absolute inset-x-0 bottom-0 z-10 overflow-hidden"
+          style={{
+            top: heroHeight,
+            paddingLeft: padX,
+            paddingRight: padX,
+            paddingBottom: padX,
+          }}
+        >
+          <p
+            className="text-zinc-200"
+            style={{
+              fontSize: Math.max(5, Math.round(14 * scale)),
+              marginBottom: Math.max(2, Math.round(6 * scale)),
+            }}
+          >
+            {photos.length} photos
+          </p>
+          <PreviewPhotoMasonry photos={photos} variant={variant} scale={scale} />
+        </div>
+
         {isMobile ? (
           <div
             className="pointer-events-none absolute bottom-0.5 left-1/2 z-20 h-0.5 w-6 -translate-x-1/2 rounded-full bg-zinc-600/80"
@@ -242,6 +314,7 @@ export default function HeroFrameEditor({
   open,
   title,
   heroSrc,
+  photos = [],
   initialFrame,
   saving,
   onCancel,
@@ -319,8 +392,20 @@ export default function HeroFrameEditor({
                 : 'flex items-end justify-center gap-5 border-t border-zinc-800 pt-3'
             }`}
           >
-            <HeroGalleryPreview variant="mobile" title={title} heroSrc={heroSrc} frame={draft} />
-            <HeroGalleryPreview variant="desktop" title={title} heroSrc={heroSrc} frame={draft} />
+            <HeroGalleryPreview
+              variant="mobile"
+              title={title}
+              heroSrc={heroSrc}
+              frame={draft}
+              photos={photos}
+            />
+            <HeroGalleryPreview
+              variant="desktop"
+              title={title}
+              heroSrc={heroSrc}
+              frame={draft}
+              photos={photos}
+            />
           </div>
         </div>
 

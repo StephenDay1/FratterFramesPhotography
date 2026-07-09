@@ -694,7 +694,7 @@ function GalleryViewPage() {
             style={riseDelay(0)}
           >
             {hasHero ? (
-              <div className="flex min-h-[min(48vh,400px)] flex-col justify-end pb-2 pt-8 md:min-h-[min(72vh,640px)] md:pb-4 md:pt-10">
+              <div className="flex min-h-[80vh] flex-col justify-end pb-2 pt-8 md:min-h-[82vh] md:pb-4 md:pt-10">
                 <h1 className="max-w-4xl text-3xl font-semibold tracking-tight text-white drop-shadow-[0_2px_24px_rgba(0,0,0,0.85)] md:text-5xl">
                   {galleryTitle ?? 'Your Gallery'}
                 </h1>
