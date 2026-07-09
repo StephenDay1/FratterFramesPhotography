@@ -1,8 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
   CheckSquare,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   CopyCheck,
   Crop,
@@ -59,6 +61,7 @@ import {
   writeParallelUploadPreference,
 } from './galleryUploadQueue'
 import HeroFrameEditor from './HeroFrameEditor'
+import { LightboxPhoto } from './PhotoLightbox'
 import { heroGradientAtScroll, heroImageStyle, HERO_DEFAULT_FRAME, normalizeHeroFrame } from './heroFrame'
 
 async function userIsGalleryViewer(user) {
@@ -473,11 +476,72 @@ function GalleryAdminPage() {
   const [parallelUploadsEnabled, setParallelUploadsEnabled] = useState(() =>
     readParallelUploadPreference(),
   )
+  const [lightboxIndex, setLightboxIndex] = useState(null)
 
   const selected = useMemo(
     () => galleries.find((g) => g.id === selectedId) || null,
     [galleries, selectedId],
   )
+
+  const closeLightbox = useCallback(() => {
+    setLightboxIndex(null)
+  }, [])
+
+  const goPrevLightbox = useCallback(() => {
+    setLightboxIndex((i) =>
+      i === null || photos.length === 0 ? null : (i - 1 + photos.length) % photos.length,
+    )
+  }, [photos.length])
+
+  const goNextLightbox = useCallback(() => {
+    setLightboxIndex((i) =>
+      i === null || photos.length === 0 ? null : (i + 1) % photos.length,
+    )
+  }, [photos.length])
+
+  useEffect(() => {
+    setLightboxIndex(null)
+  }, [selectedId])
+
+  useEffect(() => {
+    if (selectionMode) setLightboxIndex(null)
+  }, [selectionMode])
+
+  useEffect(() => {
+    if (lightboxIndex !== null && lightboxIndex >= photos.length) {
+      setLightboxIndex(null)
+    }
+  }, [photos.length, lightboxIndex])
+
+  useEffect(() => {
+    if (lightboxIndex === null) return undefined
+
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') closeLightbox()
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        goPrevLightbox()
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        goNextLightbox()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [lightboxIndex, closeLightbox, goPrevLightbox, goNextLightbox])
+
+  const lightboxPhoto = lightboxIndex !== null ? photos[lightboxIndex] : null
+  const lightboxHasMedia = lightboxPhoto
+    ? Boolean(r2PhotoPreviewUrl(lightboxPhoto) || r2PublicUrl(lightboxPhoto.r2Key))
+    : false
+  const lightboxIsThumbnail = lightboxPhoto?.id === selected?.thumbnailPhotoId
+  const lightboxSlideKey = lightboxPhoto
+    ? `${lightboxPhoto.id ?? 'photo'}-${lightboxIndex}`
+    : ''
 
   const galleryStorageTotalBytes = (galleryId) =>
     (storageByGallery[galleryId] || 0) + (storageExportZipByGallery[galleryId] || 0)
@@ -1508,7 +1572,7 @@ function GalleryAdminPage() {
                 </button>
                 <button
                   type="button"
-                  className="shrink-0 self-stretch px-2 text-zinc-500 transition hover:text-red-300 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                  className="shrink-0 self-stretch px-2 text-zinc-500 transition hover:text-red-400 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={busy}
                   aria-label={`Delete gallery ${g.title || 'Untitled'}`}
                   title="Delete gallery"
@@ -1566,7 +1630,7 @@ function GalleryAdminPage() {
                 {/* Left Column */}
                 <div className="flex min-w-0 flex-col lg:min-h-0 lg:h-full lg:overflow-hidden">
                   {selected?.thumbnailPhoto ? (
-                    <div className="relative mb-3 w-full shrink-0 overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-zinc-700 aspect-[1440/738]">
+                    <div className="relative mb-3 w-full shrink-0 overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-zinc-700 aspect-1440/960">
                       <img
                         src={
                           r2PublicUrl(selected.thumbnailPhoto.r2Key) ||
@@ -1575,11 +1639,6 @@ function GalleryAdminPage() {
                         alt=""
                         className="absolute inset-0 h-full w-full object-cover"
                         style={heroImageStyle(normalizeHeroFrame(selected.heroFrame))}
-                      />
-                      <div
-                        className="absolute inset-0"
-                        style={{ background: heroGradientAtScroll(0) }}
-                        aria-hidden
                       />
                       <button
                         type="button"
@@ -1810,7 +1869,11 @@ function GalleryAdminPage() {
                   </div> */}
                 </div>
 
-                <div className="flex min-w-0 flex-col lg:min-h-0 lg:h-full">
+                <div
+                  className={`relative flex min-w-0 flex-col lg:min-h-0 lg:h-full${
+                    lightboxIndex !== null ? ' overflow-hidden' : ''
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-zinc-200">
                       {photos.length ? `${photos.length} photos` : 'No photos yet'} ·{' '}
@@ -1896,7 +1959,7 @@ function GalleryAdminPage() {
                       selectionMode ? (ev) => ev.preventDefault() : undefined
                     }
                   >
-                    {photos.map((p) => {
+                    {photos.map((p, index) => {
                       const fullUrl = r2PublicUrl(p.r2Key)
                       const thumbUrl = r2PhotoPreviewUrl(p) || fullUrl
                       const bytes = photoStorageBytes(p)
@@ -1942,13 +2005,30 @@ function GalleryAdminPage() {
                           ) : null}
                           <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md bg-zinc-900">
                             {thumbUrl ? (
-                              <img
-                                src={thumbUrl}
-                                alt=""
-                                className="h-full w-full object-cover"
-                                loading="lazy"
-                                draggable={false}
-                              />
+                              selectionMode ? (
+                                <img
+                                  src={thumbUrl}
+                                  alt=""
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                  draggable={false}
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setLightboxIndex(index)}
+                                  className="h-full w-full cursor-pointer outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+                                  aria-label={`Preview ${p.filename}`}
+                                >
+                                  <img
+                                    src={thumbUrl}
+                                    alt=""
+                                    className="h-full w-full object-cover"
+                                    loading="lazy"
+                                    draggable={false}
+                                  />
+                                </button>
+                              )
                             ) : (
                               <div className="flex h-full items-center justify-center text-[10px] text-zinc-600">
                                 —
@@ -2023,6 +2103,98 @@ function GalleryAdminPage() {
                       )
                     })}
                   </ul>
+
+                  {lightboxPhoto && lightboxHasMedia ? (
+                    <div
+                      className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 p-4"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-label="Photo preview"
+                      onClick={closeLightbox}
+                    >
+                      <button
+                        type="button"
+                        onClick={closeLightbox}
+                        className="absolute right-3 top-3 z-10 cursor-pointer rounded-full bg-white/10 px-3 py-1.5 text-sm font-medium text-white backdrop-blur transition hover:bg-white/20"
+                      >
+                        Close
+                      </button>
+                      <div
+                        className="flex h-full min-h-0 w-full max-w-full flex-col items-center justify-center gap-3"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div
+                          className="flex min-h-0 w-full max-w-full flex-1 items-center gap-2"
+                          data-lightbox-viewport
+                        >
+                          <button
+                            type="button"
+                            onClick={goPrevLightbox}
+                            aria-label="Previous photo"
+                            className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition hover:bg-white/20"
+                          >
+                            <ChevronLeft className="h-5 w-5" />
+                          </button>
+                          <LightboxPhoto
+                            key={lightboxSlideKey}
+                            photo={lightboxPhoto}
+                            alt={lightboxPhoto.filename || 'Photo'}
+                          />
+                          <button
+                            type="button"
+                            onClick={goNextLightbox}
+                            aria-label="Next photo"
+                            className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition hover:bg-white/20"
+                          >
+                            <ChevronRight className="h-5 w-5" />
+                          </button>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-center gap-2 px-2">
+                          {lightboxPhoto.filename ? (
+                            <p className="max-w-full truncate text-center text-sm text-zinc-400">
+                              {lightboxPhoto.filename}
+                            </p>
+                          ) : null}
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              className={`cursor-pointer rounded-full bg-white/10 p-2 backdrop-blur transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                lightboxIsThumbnail
+                                  ? 'text-amber-400 hover:bg-white/20 hover:text-amber-300'
+                                  : 'text-zinc-300 hover:bg-white/20 hover:text-amber-400'
+                              }`}
+                              onClick={() => onToggleThumbnailPhoto(lightboxPhoto.id)}
+                              disabled={busy}
+                              aria-pressed={lightboxIsThumbnail}
+                              aria-label={
+                                lightboxIsThumbnail
+                                  ? `Remove ${lightboxPhoto.filename} as gallery thumbnail`
+                                  : `Set ${lightboxPhoto.filename} as gallery thumbnail`
+                              }
+                              title={
+                                lightboxIsThumbnail ? 'Gallery thumbnail' : 'Set as gallery thumbnail'
+                              }
+                            >
+                              <Star
+                                className={`h-4 w-4 ${lightboxIsThumbnail ? 'fill-current' : ''}`}
+                                aria-hidden="true"
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              className="cursor-pointer rounded-full bg-white/10 p-2 text-zinc-300 backdrop-blur transition hover:bg-white/20 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+                              onClick={() => onDeletePhoto(lightboxPhoto.id)}
+                              disabled={busy}
+                              aria-label={`Delete ${lightboxPhoto.filename}`}
+                              title="Delete photo"
+                            >
+                              <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </>
