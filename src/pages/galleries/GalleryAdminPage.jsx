@@ -24,6 +24,7 @@ import {
   cleanupGalleryExportZips,
   createGallery,
   deleteGalleryDocument,
+  updateGallery,
   deletePhotoRecord,
   listGalleryPhotos,
   listGalleries,
@@ -337,6 +338,92 @@ function GalleryUploadProgress({
   )
 }
 
+function InlineEditableText({
+  value,
+  editing,
+  disabled,
+  saving,
+  onStartEdit,
+  onChange,
+  onSave,
+  onCancel,
+  displayClassName = '',
+  inputClassName = '',
+  ariaLabel,
+  emptyDisplay = '',
+  fullWidth = false,
+}) {
+  const inputRef = useRef(null)
+  const cancelledRef = useRef(false)
+
+  useEffect(() => {
+    if (!editing) return
+    cancelledRef.current = false
+    const input = inputRef.current
+    if (!input) return
+    input.focus()
+    input.select()
+  }, [editing])
+
+  const handleBlur = () => {
+    if (cancelledRef.current) {
+      cancelledRef.current = false
+      return
+    }
+    onSave()
+  }
+
+  const handleKeyDown = (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault()
+      inputRef.current?.blur()
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault()
+      cancelledRef.current = true
+      onCancel()
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(ev) => onChange(ev.target.value)}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        disabled={disabled || saving}
+        aria-label={ariaLabel}
+        className={`${fullWidth ? 'w-full' : 'inline-block w-fit max-w-full'} rounded border border-zinc-500 bg-black px-0.5 py-0.5 outline-none ring-1 ring-zinc-500/40 disabled:opacity-50 ${inputClassName}`}
+      />
+    )
+  }
+
+  const displayValue = value?.trim() || emptyDisplay
+
+  return (
+    <span
+      role="button"
+      tabIndex={disabled || saving ? -1 : 0}
+      onClick={() => !disabled && !saving && onStartEdit()}
+      onKeyDown={(ev) => {
+        if (disabled || saving) return
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault()
+          onStartEdit()
+        }
+      }}
+      className={`cursor-text rounded py-0.5 transition w-fit focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500 ${
+        disabled || saving ? 'cursor-not-allowed opacity-50' : ''
+      } ${displayClassName}`}
+      aria-label={`Edit ${ariaLabel}`}
+    >
+      {displayValue}
+    </span>
+  )
+}
+
 function GalleryAdminPage() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -367,6 +454,9 @@ function GalleryAdminPage() {
   const [deleteConfirmGallery, setDeleteConfirmGallery] = useState(null)
   const [heroEditorOpen, setHeroEditorOpen] = useState(false)
   const [heroEditorSaving, setHeroEditorSaving] = useState(false)
+  const [editingGalleryField, setEditingGalleryField] = useState(null)
+  const [galleryFieldDraft, setGalleryFieldDraft] = useState('')
+  const [galleryDetailsSaving, setGalleryDetailsSaving] = useState(false)
   /** Set only while a multi-file R2 upload is running; drives the progress bar. */
   const [uploadProgress, setUploadProgress] = useState(null)
   /** Set only while bulk-deleting photos; drives the delete progress bar. */
@@ -519,6 +609,7 @@ function GalleryAdminPage() {
     setSelectedPhotoIds(new Set())
     selectionAnchorRef.current = null
     dragSelectRef.current = null
+    setEditingGalleryField(null)
   }, [selectedId])
 
   useEffect(() => {
@@ -750,6 +841,81 @@ function GalleryAdminPage() {
     setGalleries((prev) =>
       prev.map((gallery) => (gallery.id === galleryId ? { ...gallery, heroFrame: frame } : gallery)),
     )
+  }
+
+  const patchGalleryDetailsInList = (galleryId, { title, clientAccessKey }) => {
+    setGalleries((prev) =>
+      prev.map((gallery) => {
+        if (gallery.id !== galleryId) return gallery
+        const next = { ...gallery }
+        if (title !== undefined) next.title = title
+        if (clientAccessKey !== undefined) next.clientAccessKey = clientAccessKey
+        return next
+      }),
+    )
+  }
+
+  const onStartEditGalleryField = (field) => {
+    if (!selected || busy || galleryDetailsSaving) return
+    setGalleryFieldDraft(
+      field === 'title' ? selected.title || '' : selected.clientAccessKey || '',
+    )
+    setEditingGalleryField(field)
+  }
+
+  const onCancelEditGalleryField = () => {
+    setEditingGalleryField(null)
+  }
+
+  const onSaveGalleryField = async (field) => {
+    if (!selectedId || galleryDetailsSaving || editingGalleryField !== field) return
+
+    if (field === 'title') {
+      const nextTitle = galleryFieldDraft.trim() || 'Untitled'
+      const previousTitle = selected?.title || 'Untitled'
+      if (nextTitle === previousTitle) {
+        setEditingGalleryField(null)
+        return
+      }
+      setGalleryDetailsSaving(true)
+      setLoadError('')
+      patchGalleryDetailsInList(selectedId, { title: nextTitle })
+      try {
+        await updateGallery(selectedId, { title: nextTitle })
+        setEditingGalleryField(null)
+      } catch (err) {
+        patchGalleryDetailsInList(selectedId, { title: previousTitle })
+        setLoadError(err?.message || 'Could not update gallery title')
+      } finally {
+        setGalleryDetailsSaving(false)
+      }
+      return
+    }
+
+    const trimmedKey = galleryFieldDraft.trim()
+    const previousKey = selected?.clientAccessKey || ''
+    if (!trimmedKey) {
+      setLoadError('Client access key is required')
+      setGalleryFieldDraft(previousKey)
+      setEditingGalleryField(null)
+      return
+    }
+    if (trimmedKey === previousKey) {
+      setEditingGalleryField(null)
+      return
+    }
+    setGalleryDetailsSaving(true)
+    setLoadError('')
+    patchGalleryDetailsInList(selectedId, { clientAccessKey: trimmedKey })
+    try {
+      await updateGallery(selectedId, { clientAccessKey: trimmedKey })
+      setEditingGalleryField(null)
+    } catch (err) {
+      patchGalleryDetailsInList(selectedId, { clientAccessKey: previousKey })
+      setLoadError(err?.message || 'Could not update client access key')
+    } finally {
+      setGalleryDetailsSaving(false)
+    }
   }
 
   const clearGalleryThumbnailIfPhoto = async (photoDocId) => {
@@ -1427,7 +1593,27 @@ function GalleryAdminPage() {
                   ) : null}
                 <div className="flex shrink-0 gap-4">
                   <div className="min-w-0 flex-1">
-                    <h2 className="text-2xl font-semibold">{selected.title || 'Untitled'}</h2>
+                    <h2 className="text-2xl font-semibold">
+                      <InlineEditableText
+                        value={
+                          editingGalleryField === 'title'
+                            ? galleryFieldDraft
+                            : selected.title || ''
+                        }
+                        editing={editingGalleryField === 'title'}
+                        disabled={busy}
+                        saving={galleryDetailsSaving}
+                        onStartEdit={() => onStartEditGalleryField('title')}
+                        onChange={setGalleryFieldDraft}
+                        onSave={() => onSaveGalleryField('title')}
+                        onCancel={onCancelEditGalleryField}
+                        displayClassName="block text-2xl font-semibold"
+                        inputClassName="text-2xl font-semibold"
+                        ariaLabel="gallery title"
+                        emptyDisplay="Untitled"
+                        fullWidth={true}
+                      />
+                    </h2>
                     <div className="mt-1 flex flex-wrap items-center gap-3">
                       <p className="font-mono text-xs text-zinc-400">{selected.id}</p>
                       <button
@@ -1437,14 +1623,12 @@ function GalleryAdminPage() {
                         aria-label="Copy share link"
                         title="Copy share link"
                       >
-                        {copyStatus ? <CopyCheck className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+                        {copyStatus ? (
+                          <CopyCheck className="h-4 w-4" aria-hidden="true" />
+                        ) : (
+                          <Copy className="h-4 w-4" aria-hidden="true" />
+                        )}
                       </button>
-                      {/* <button
-                        type="button"
-                        className="rounded border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 cursor-pointer"
-                        aria-label="View gallery"
-                        title="View gallery"
-                      > */}
                       <Link
                         to={`/galleries/${selected.id}`}
                         state={{ fromAdmin: true }}
@@ -1454,10 +1638,27 @@ function GalleryAdminPage() {
                       >
                         <SquareArrowOutUpRight className="h-4 w-4" aria-hidden="true" />
                       </Link>
-                      {/* </button> */}
                     </div>
                     <p className="mt-1 text-sm text-zinc-500">
-                      Client access key: <span className="font-mono text-zinc-300">{selected.clientAccessKey}</span>
+                      Client access key:{' '}
+                      <InlineEditableText
+                        value={
+                          editingGalleryField === 'accessKey'
+                            ? galleryFieldDraft
+                            : selected.clientAccessKey || ''
+                        }
+                        editing={editingGalleryField === 'accessKey'}
+                        disabled={busy}
+                        saving={galleryDetailsSaving}
+                        onStartEdit={() => onStartEditGalleryField('accessKey')}
+                        onChange={setGalleryFieldDraft}
+                        onSave={() => onSaveGalleryField('accessKey')}
+                        onCancel={onCancelEditGalleryField}
+                        displayClassName="inline font-mono text-zinc-300"
+                        inputClassName="font-mono text-sm text-zinc-300"
+                        ariaLabel="client access key"
+                        emptyDisplay="(required)"
+                      />
                     </p>
                   </div>
                 </div>

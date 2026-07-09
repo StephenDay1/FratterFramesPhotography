@@ -115,6 +115,19 @@ export async function deleteGalleryDocument(galleryId) {
   await deleteDoc(doc(db, 'galleries', galleryId))
 }
 
+/** Updates gallery title and/or client access key (owner/admin only). */
+export async function updateGallery(galleryId, { title, clientAccessKey }) {
+  const updates = {}
+  if (title !== undefined) {
+    updates.title = String(title || '').trim() || 'Untitled shoot'
+  }
+  if (clientAccessKey !== undefined) {
+    updates.clientAccessKey = String(clientAccessKey || '').trim()
+  }
+  if (!Object.keys(updates).length) return
+  await updateDoc(doc(db, 'galleries', galleryId), updates)
+}
+
 /** Sets which photo is the gallery thumbnail (Firestore photo doc id), or clears it. */
 export async function setGalleryThumbnailPhoto(galleryId, photoDocId) {
   const ref = doc(db, 'galleries', galleryId)
