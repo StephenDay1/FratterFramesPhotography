@@ -1886,7 +1886,7 @@ function GalleryAdminPage() {
                   </p>
                   )}
                   <ul
-                    className={`scrollbar-hide mt-4 space-y-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto${
+                    className={`gallery-photo-grid scrollbar-hide mt-4 grid gap-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto${
                       selectionMode ? ' select-none' : ''
                     }`}
                     onPointerMove={selectionMode && !busy ? onPhotoListPointerMove : undefined}
@@ -1904,7 +1904,7 @@ function GalleryAdminPage() {
                         <li
                           key={p.id}
                           data-photo-id={p.id}
-                          className={`flex gap-3 rounded-lg border p-2 transition ${
+                          className={`flex min-w-0 self-start gap-3 rounded-lg border p-2 transition ${
                             selectionMode && isSelected
                               ? 'border-zinc-500 bg-zinc-900/80'
                               : 'border-zinc-800 bg-zinc-950/60'
@@ -1926,7 +1926,9 @@ function GalleryAdminPage() {
                                 selectionAnchorRef.current = p.id
                               }}
                               aria-pressed={isSelected}
-                              aria-label={isSelected ? `Deselect ${p.filename}` : `Select ${p.filename}`}
+                              aria-label={
+                                isSelected ? `Deselect ${p.filename}` : `Select ${p.filename}`
+                              }
                               className="mt-0.5 shrink-0 cursor-pointer text-zinc-400 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {isSelected ? (
@@ -1951,68 +1953,70 @@ function GalleryAdminPage() {
                               </div>
                             )}
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm">{p.filename}</p>
-                            <p className="mt-0.5 font-mono text-xs text-zinc-500">
-                              {bytes > 0 ? formatBytes(bytes) : 'Size unknown'}
-                            </p>
-                          </div>
-                          {!selectionMode ? (
-                            <div className="flex shrink-0 items-center gap-2">
-                              <button
-                                type="button"
-                                className={`cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                                  isThumbnail
-                                    ? 'text-amber-400 hover:text-amber-300'
-                                    : 'text-zinc-500 hover:text-amber-400'
-                                }`}
-                                onClick={(ev) => {
-                                  ev.stopPropagation()
-                                  onToggleThumbnailPhoto(p.id)
-                                }}
-                                disabled={busy}
-                                aria-pressed={isThumbnail}
-                                aria-label={
-                                  isThumbnail
-                                    ? `Remove ${p.filename} as gallery thumbnail`
-                                    : `Set ${p.filename} as gallery thumbnail`
-                                }
-                                title={isThumbnail ? 'Gallery thumbnail' : 'Set as gallery thumbnail'}
-                              >
-                                <Star
-                                  className={`h-4 w-4 ${isThumbnail ? 'fill-current' : ''}`}
-                                  aria-hidden="true"
-                                />
-                              </button>
-                              {isThumbnail ? (
+                          <div className="flex min-w-0 flex-col gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm">{p.filename}</p>
+                              <p className="mt-0.5 font-mono text-xs text-zinc-500">
+                                {bytes > 0 ? formatBytes(bytes) : 'Size unknown'}
+                              </p>
+                            </div>
+                            {!selectionMode ? (
+                              <div className="flex items-center gap-2">
                                 <button
                                   type="button"
-                                  className="cursor-pointer text-zinc-500 transition hover:text-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className={`cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    isThumbnail
+                                      ? 'text-amber-400 hover:text-amber-300'
+                                      : 'text-zinc-500 hover:text-amber-400'
+                                  }`}
                                   onClick={(ev) => {
                                     ev.stopPropagation()
-                                    setHeroEditorOpen(true)
+                                    onToggleThumbnailPhoto(p.id)
                                   }}
-                                  disabled={busy || heroEditorSaving}
-                                  aria-label={`Adjust hero framing for ${p.filename}`}
-                                  title="Adjust hero framing"
+                                  disabled={busy}
+                                  aria-pressed={isThumbnail}
+                                  aria-label={
+                                    isThumbnail
+                                      ? `Remove ${p.filename} as gallery thumbnail`
+                                      : `Set ${p.filename} as gallery thumbnail`
+                                  }
+                                  title={isThumbnail ? 'Gallery thumbnail' : 'Set as gallery thumbnail'}
                                 >
-                                  <Crop className="h-4 w-4" aria-hidden="true" />
+                                  <Star
+                                    className={`h-4 w-4 ${isThumbnail ? 'fill-current' : ''}`}
+                                    aria-hidden="true"
+                                  />
                                 </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                className="cursor-pointer text-zinc-500 transition hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
-                                onClick={(ev) => {
-                                  ev.stopPropagation()
-                                  onDeletePhoto(p.id)
-                                }}
-                                disabled={busy}
-                                aria-label={`Delete ${p.filename}`}
-                              >
-                                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                              </button>
-                            </div>
-                          ) : null}
+                                {isThumbnail ? (
+                                  <button
+                                    type="button"
+                                    className="cursor-pointer text-zinc-500 transition hover:text-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation()
+                                      setHeroEditorOpen(true)
+                                    }}
+                                    disabled={busy || heroEditorSaving}
+                                    aria-label={`Adjust hero framing for ${p.filename}`}
+                                    title="Adjust hero framing"
+                                  >
+                                    <Crop className="h-4 w-4" aria-hidden="true" />
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className="cursor-pointer text-zinc-500 transition hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation()
+                                    onDeletePhoto(p.id)
+                                  }}
+                                  disabled={busy}
+                                  aria-label={`Delete ${p.filename}`}
+                                >
+                                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
                         </li>
                       )
                     })}

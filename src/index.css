@@ -34,3 +34,9 @@ body {
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+.gallery-photo-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  grid-auto-rows: max-content;
+  align-content: start;
+}
