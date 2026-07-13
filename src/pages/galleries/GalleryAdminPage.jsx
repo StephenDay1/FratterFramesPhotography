@@ -8,6 +8,7 @@ import {
   Copy,
   CopyCheck,
   Crop,
+  GripVertical,
   Info,
   Pencil,
   Square,
@@ -31,6 +32,8 @@ import {
   listGalleryPhotos,
   listGalleries,
   listGalleriesWithSelectedPhotos,
+  photoEffectiveSortOrder,
+  reorderGalleryPhotos,
   setGalleryHeroFrame,
   setGalleryThumbnailPhoto,
 } from '../../services/galleryApi'
@@ -477,6 +480,52 @@ function GalleryAdminPage() {
     readParallelUploadPreference(),
   )
   const [lightboxIndex, setLightboxIndex] = useState(null)
+  const [draggingPhotoId, setDraggingPhotoId] = useState(null)
+  /**
+   * Drop slot while dragging.
+   * insertIndex: 0..n in the current list.
+   * edgePhotoIndex + edge: which card edge to paint (so row wraps still look right).
+   */
+  const [dropIndicator, setDropIndicator] = useState(null)
+  const photosBeforeReorderRef = useRef(null)
+  const photoGridRef = useRef(null)
+  const photoDragPreviewRef = useRef(null)
+  /** True when the admin photo grid is laying out as a single column (use vertical drop slots). */
+  const [photoGridSingleColumn, setPhotoGridSingleColumn] = useState(true)
+  const photoGridSingleColumnRef = useRef(true)
+
+  const clearPhotoDragPreview = useCallback(() => {
+    const node = photoDragPreviewRef.current
+    if (node?.isConnected) node.remove()
+    photoDragPreviewRef.current = null
+  }, [])
+
+  const syncPhotoGridColumnMode = useCallback(() => {
+    const el = photoGridRef.current
+    if (!el) {
+      photoGridSingleColumnRef.current = true
+      setPhotoGridSingleColumn(true)
+      return
+    }
+
+    const template = getComputedStyle(el).gridTemplateColumns.trim()
+    const styleColumnCount =
+      !template || template === 'none'
+        ? 1
+        : template.split(/\s+/).filter((part) => part && part !== '0px').length
+
+    const items = el.querySelectorAll(':scope > li')
+    let sideBySide = false
+    if (items.length >= 2) {
+      const a = items[0].getBoundingClientRect()
+      const b = items[1].getBoundingClientRect()
+      sideBySide = Math.abs(a.top - b.top) <= 4 && b.left > a.left + 8
+    }
+
+    const single = styleColumnCount <= 1 && !sideBySide
+    photoGridSingleColumnRef.current = single
+    setPhotoGridSingleColumn(single)
+  }, [])
 
   const selected = useMemo(
     () => galleries.find((g) => g.id === selectedId) || null,
@@ -542,6 +591,14 @@ function GalleryAdminPage() {
   const lightboxSlideKey = lightboxPhoto
     ? `${lightboxPhoto.id ?? 'photo'}-${lightboxIndex}`
     : ''
+
+  const photoDragFromIndex = draggingPhotoId
+    ? photos.findIndex((photo) => photo.id === draggingPhotoId)
+    : -1
+  const dropInsertIndex = dropIndicator?.insertIndex ?? null
+  const photoDropIsNoOp =
+    photoDragFromIndex >= 0 &&
+    (dropInsertIndex === photoDragFromIndex || dropInsertIndex === photoDragFromIndex + 1)
 
   const galleryStorageTotalBytes = (galleryId) =>
     (storageByGallery[galleryId] || 0) + (storageExportZipByGallery[galleryId] || 0)
@@ -674,7 +731,22 @@ function GalleryAdminPage() {
     selectionAnchorRef.current = null
     dragSelectRef.current = null
     setEditingGalleryField(null)
+    setDraggingPhotoId(null)
+    setDropIndicator(null)
   }, [selectedId])
+
+  useEffect(() => () => clearPhotoDragPreview(), [clearPhotoDragPreview])
+
+  useEffect(() => {
+    const el = photoGridRef.current
+    if (!el) return undefined
+    syncPhotoGridColumnMode()
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(syncPhotoGridColumnMode)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [photos.length, selectedId, syncPhotoGridColumnMode])
 
   useEffect(() => {
     if (!selectionMode) return undefined
@@ -1092,6 +1164,149 @@ function GalleryAdminPage() {
     await refreshStorageUsage()
   }
 
+  const allocateSortOrdersForNewPhotos = (count) => {
+    if (count <= 0) return []
+    const minExisting = photos.length
+      ? Math.min(...photos.map(photoEffectiveSortOrder))
+      : 0
+    const base = minExisting - count
+    return Array.from({ length: count }, (_, i) => base + i)
+  }
+
+  const onPhotoDragStart = (photoId, ev) => {
+    if (selectionMode || busy) {
+      ev.preventDefault()
+      return
+    }
+    syncPhotoGridColumnMode()
+    clearPhotoDragPreview()
+    ev.dataTransfer.effectAllowed = 'move'
+    ev.dataTransfer.setData('text/plain', photoId)
+
+    const row = photoGridRef.current?.querySelector(
+      `[data-photo-id="${CSS.escape(photoId)}"]`,
+    )
+    const sourceImg = row?.querySelector('img')
+    const previewSize = 88
+    const preview = document.createElement('div')
+    preview.setAttribute('aria-hidden', 'true')
+    Object.assign(preview.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      width: `${previewSize}px`,
+      height: `${previewSize}px`,
+      borderRadius: '10px',
+      overflow: 'hidden',
+      boxShadow: '0 16px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.18)',
+      background: '#18181b',
+      zIndex: '10000',
+      pointerEvents: 'none',
+      opacity: '0.95',
+      transform: 'rotate(2deg)',
+    })
+    if (sourceImg?.src) {
+      const img = document.createElement('img')
+      img.src = sourceImg.currentSrc || sourceImg.src
+      img.alt = ''
+      Object.assign(img.style, {
+        width: '100%',
+        height: '100%',
+        objectFit: 'cover',
+        display: 'block',
+      })
+      preview.appendChild(img)
+    }
+    document.body.appendChild(preview)
+    photoDragPreviewRef.current = preview
+    // Browser snapshots this node as the drag ghost; then tuck it off-screen.
+    ev.dataTransfer.setDragImage(preview, previewSize / 2, previewSize / 2)
+    requestAnimationFrame(() => {
+      if (photoDragPreviewRef.current === preview) {
+        preview.style.top = '-1000px'
+        preview.style.left = '-1000px'
+      }
+    })
+
+    setDraggingPhotoId(photoId)
+    setDropIndicator(null)
+  }
+
+  const onPhotoDragEnd = () => {
+    clearPhotoDragPreview()
+    setDraggingPhotoId(null)
+    setDropIndicator(null)
+  }
+
+  const onPhotoDragOver = (photoIndex, ev) => {
+    if (selectionMode || busy || !draggingPhotoId) return
+    ev.preventDefault()
+    ev.dataTransfer.dropEffect = 'move'
+    const rect = ev.currentTarget.getBoundingClientRect()
+    const vertical = photoGridSingleColumnRef.current
+    const after = vertical
+      ? ev.clientY > rect.top + rect.height / 2
+      : ev.clientX > rect.left + rect.width / 2
+    const next = {
+      insertIndex: after ? photoIndex + 1 : photoIndex,
+      edgePhotoIndex: photoIndex,
+      edge: after ? 'after' : 'before',
+      vertical,
+    }
+    setDropIndicator((prev) => {
+      if (
+        prev &&
+        prev.insertIndex === next.insertIndex &&
+        prev.edgePhotoIndex === next.edgePhotoIndex &&
+        prev.edge === next.edge &&
+        prev.vertical === next.vertical
+      ) {
+        return prev
+      }
+      return next
+    })
+  }
+
+  const onPhotoDropAtIndex = async (insertIndex, ev) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+    const sourceId = draggingPhotoId || ev.dataTransfer.getData('text/plain')
+    setDraggingPhotoId(null)
+    setDropIndicator(null)
+    clearPhotoDragPreview()
+    if (selectionMode || busy || !selectedId || !sourceId) return
+
+    const fromIndex = photos.findIndex((p) => p.id === sourceId)
+    if (fromIndex < 0) return
+
+    // insertIndex is a slot in the list while the dragged item is still present.
+    // Slots immediately before/after itself are no-ops.
+    if (insertIndex === fromIndex || insertIndex === fromIndex + 1) return
+
+    let toIndex = insertIndex
+    if (toIndex > fromIndex) toIndex -= 1
+
+    const previous = photos
+    const next = [...photos]
+    const [moved] = next.splice(fromIndex, 1)
+    next.splice(toIndex, 0, moved)
+    const orderedIds = next.map((p) => p.id)
+
+    photosBeforeReorderRef.current = previous
+    setPhotos(next.map((p, i) => ({ ...p, sortOrder: i })))
+    setBusy(true)
+    setLoadError('')
+    try {
+      await reorderGalleryPhotos(selectedId, orderedIds)
+    } catch (err) {
+      setPhotos(photosBeforeReorderRef.current || previous)
+      setLoadError(err?.message || 'Could not save photo order')
+    } finally {
+      photosBeforeReorderRef.current = null
+      setBusy(false)
+    }
+  }
+
   const formatBytes = (bytes) => {
     const value = Number(bytes) || 0
     if (value <= 0) return '0 B'
@@ -1141,6 +1356,7 @@ function GalleryAdminPage() {
     const uploadStartCount = photos.length
     const galleryTitle = selected?.title || 'gallery'
     const concurrency = parallelUploadsEnabled ? UPLOAD_CONCURRENCY : 1
+    const sortOrders = allocateSortOrdersForNewPhotos(fileList.length)
     const items = fileList.map((file, i) => {
       const displayBasename = buildGalleryPhotoUploadBasename({
         galleryTitle,
@@ -1152,6 +1368,7 @@ function GalleryAdminPage() {
         file,
         displayBasename,
         label: truncateProgressLabel(displayBasename),
+        sortOrder: sortOrders[i],
       }
     })
 
@@ -1200,6 +1417,7 @@ function GalleryAdminPage() {
             ownerUid: user.uid,
             r2Key,
             filename: item.displayBasename,
+            sortOrder: item.sortOrder,
           })
         },
       })
@@ -1307,13 +1525,16 @@ function GalleryAdminPage() {
     setBusy(true)
     setLoadError('')
     try {
-      for (const line of lines) {
+      const sortOrders = allocateSortOrdersForNewPhotos(lines.length)
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
         const r2Key = line.includes('/') ? line : defaultR2KeyForUpload(selectedId, line)
         await addPhotoRecord({
           galleryId: selectedId,
           ownerUid: user.uid,
           r2Key,
           filename: sanitizeObjectSegment(line.split('/').pop()),
+          sortOrder: sortOrders[i],
         })
       }
       setBulkKeys('')
@@ -1916,7 +2137,11 @@ function GalleryAdminPage() {
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() => setSelectionMode(true)}
+                            onClick={() => {
+                              setDraggingPhotoId(null)
+                              setDropIndicator(null)
+                              setSelectionMode(true)
+                            }}
                             className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <CheckSquare className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1951,6 +2176,7 @@ function GalleryAdminPage() {
                   </p>
                   )}
                   <ul
+                    ref={photoGridRef}
                     className={`gallery-photo-grid scrollbar-hide mt-4 grid gap-3 pr-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto${
                       selectionMode ? ' select-none' : ''
                     }`}
@@ -1965,21 +2191,55 @@ function GalleryAdminPage() {
                       const bytes = photoStorageBytes(p)
                       const isSelected = selectedPhotoIds.has(p.id)
                       const isThumbnail = selected?.thumbnailPhotoId === p.id
+                      const isDragging = draggingPhotoId === p.id
+                      const showSlotBefore =
+                        draggingPhotoId &&
+                        !photoDropIsNoOp &&
+                        dropIndicator?.edgePhotoIndex === index &&
+                        dropIndicator.edge === 'before'
+                      const showSlotAfter =
+                        draggingPhotoId &&
+                        !photoDropIsNoOp &&
+                        dropIndicator?.edgePhotoIndex === index &&
+                        dropIndicator.edge === 'after'
+                      const slotVertical = dropIndicator?.vertical ?? photoGridSingleColumn
+                      const slotBarClass = slotVertical
+                        ? showSlotBefore
+                          ? 'pointer-events-none absolute left-1 right-1 top-0 z-10 h-1 -translate-y-1/2 rounded-full bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.85)]'
+                          : 'pointer-events-none absolute left-1 right-1 bottom-0 z-10 h-1 translate-y-1/2 rounded-full bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.85)]'
+                        : showSlotBefore
+                          ? 'pointer-events-none absolute top-1 bottom-1 left-0 z-10 w-1 -translate-x-1/2 rounded-full bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.85)]'
+                          : 'pointer-events-none absolute top-1 bottom-1 right-0 z-10 w-1 translate-x-1/2 rounded-full bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.85)]'
                       return (
                         <li
                           key={p.id}
                           data-photo-id={p.id}
-                          className={`flex min-w-0 self-start gap-3 rounded-lg border p-2 transition ${
+                          className={`relative flex min-w-0 self-start gap-3 rounded-lg border p-2 transition ${
                             selectionMode && isSelected
                               ? 'border-zinc-500 bg-zinc-900/80'
                               : 'border-zinc-800 bg-zinc-950/60'
-                          }${selectionMode ? ' cursor-pointer select-none' : ''}`}
+                          }${selectionMode ? ' cursor-pointer select-none' : ''}${
+                            isDragging ? ' opacity-40' : ''
+                          }`}
                           onPointerDown={
                             selectionMode && !busy
                               ? (ev) => onPhotoPointerDown(p.id, ev)
                               : undefined
                           }
+                          onDragOver={
+                            !selectionMode && !busy
+                              ? (ev) => onPhotoDragOver(index, ev)
+                              : undefined
+                          }
+                          onDrop={
+                            !selectionMode && !busy && dropInsertIndex != null
+                              ? (ev) => onPhotoDropAtIndex(dropInsertIndex, ev)
+                              : undefined
+                          }
                         >
+                          {showSlotBefore || showSlotAfter ? (
+                            <div className={slotBarClass} aria-hidden="true" />
+                          ) : null}
                           {selectionMode ? (
                             <button
                               type="button"
@@ -2002,7 +2262,20 @@ function GalleryAdminPage() {
                                 <Square className="h-5 w-5" aria-hidden="true" />
                               )}
                             </button>
-                          ) : null}
+                          ) : (
+                            <button
+                              type="button"
+                              draggable={!busy}
+                              disabled={busy}
+                              onDragStart={(ev) => onPhotoDragStart(p.id, ev)}
+                              onDragEnd={onPhotoDragEnd}
+                              aria-label={`Drag to reorder ${p.filename}`}
+                              title="Drag to reorder"
+                              className="mt-0.5 shrink-0 cursor-grab touch-none text-zinc-500 transition hover:text-zinc-200 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <GripVertical className="h-5 w-5" aria-hidden="true" />
+                            </button>
+                          )}
                           <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md bg-zinc-900">
                             {thumbUrl ? (
                               selectionMode ? (

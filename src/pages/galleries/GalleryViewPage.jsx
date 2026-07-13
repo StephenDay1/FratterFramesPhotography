@@ -639,7 +639,7 @@ function GalleryViewPage() {
 
               {!loading && !error && photos.length > 0 && (
                 <div
-                  className={`columns-2 gap-3 sm:columns-4 lg:columns-6 ${riseInClass}`}
+                  className={`grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 ${riseInClass}`}
                   style={riseDelay(120)}
                 >
                   {photos.map((p, index) => {
@@ -647,22 +647,22 @@ function GalleryViewPage() {
                     const gridSrc = r2PhotoPreviewUrl(p) || href
                     const canOpen = Boolean(gridSrc || href)
                     return (
-                      <div key={p.id} className="mb-3 break-inside-avoid">
+                      <div key={p.id} className="min-w-0">
                         {canOpen ? (
                           <button
                             type="button"
                             onClick={() => setLightboxIndex(index)}
-                            className="w-full cursor-pointer overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 text-left outline-none ring-white/0 transition focus-visible:ring-2 focus-visible:ring-white"
+                            className="block w-full aspect-square cursor-pointer overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 text-left outline-none ring-white/0 transition focus-visible:ring-2 focus-visible:ring-white"
                           >
                             <img
                               src={gridSrc || href}
                               alt={p.filename || 'Photo'}
                               loading="lazy"
-                              className="w-full object-cover transition duration-300 ease-out hover:scale-[1.02]"
+                              className="block h-full w-full object-cover transition duration-300 ease-out hover:scale-[1.02]"
                             />
                           </button>
                         ) : (
-                          <div className="flex min-h-[120px] items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/40 p-3 text-center text-xs text-zinc-500">
+                          <div className="flex aspect-square items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/40 p-3 text-center text-xs text-zinc-500">
                             Set <span className="font-mono">VITE_R2_PUBLIC_BASE_URL</span> to preview
                           </div>
                         )}

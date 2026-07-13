@@ -8,11 +8,10 @@ import {
   getDoc,
   getDocs,
   onSnapshot,
-  orderBy,
-  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { db, functions } from '../lib/firebase'
@@ -22,6 +21,22 @@ function sortByCreatedAtDesc(docs) {
     const ta = a.createdAt?.toMillis?.() ?? 0
     const tb = b.createdAt?.toMillis?.() ?? 0
     return tb - ta
+  })
+}
+
+/** Numeric order key; lower values appear first. Legacy photos fall back to newest-first. */
+export function photoEffectiveSortOrder(photo) {
+  if (typeof photo?.sortOrder === 'number' && Number.isFinite(photo.sortOrder)) {
+    return photo.sortOrder
+  }
+  return -(photo?.createdAt?.toMillis?.() ?? 0)
+}
+
+export function sortGalleryPhotos(docs) {
+  return [...docs].sort((a, b) => {
+    const delta = photoEffectiveSortOrder(a) - photoEffectiveSortOrder(b)
+    if (delta !== 0) return delta
+    return String(a.id || '').localeCompare(String(b.id || ''))
   })
 }
 
@@ -95,16 +110,44 @@ export async function createGallery({
   return galleryId
 }
 
-export async function addPhotoRecord({ galleryId, ownerUid, r2Key, thumbR2Key, filename }) {
+export async function addPhotoRecord({
+  galleryId,
+  ownerUid,
+  r2Key,
+  thumbR2Key,
+  filename,
+  sortOrder,
+}) {
   const photos = collection(db, 'galleries', galleryId, 'photos')
   const row = {
     ownerUid,
     r2Key,
     filename: filename || r2Key.split('/').pop() || 'photo',
+    sortOrder:
+      typeof sortOrder === 'number' && Number.isFinite(sortOrder) ? sortOrder : -Date.now(),
     createdAt: serverTimestamp(),
   }
   if (thumbR2Key) row.thumbR2Key = thumbR2Key
   await addDoc(photos, row)
+}
+
+/**
+ * Persists gallery photo order. `orderedPhotoIds` is first → last display order.
+ * Writes contiguous sortOrder values 0..n-1.
+ */
+export async function reorderGalleryPhotos(galleryId, orderedPhotoIds) {
+  if (!galleryId || !Array.isArray(orderedPhotoIds) || orderedPhotoIds.length === 0) return
+  const CHUNK = 450
+  for (let offset = 0; offset < orderedPhotoIds.length; offset += CHUNK) {
+    const batch = writeBatch(db)
+    const slice = orderedPhotoIds.slice(offset, offset + CHUNK)
+    slice.forEach((photoId, i) => {
+      batch.update(doc(db, 'galleries', galleryId, 'photos', photoId), {
+        sortOrder: offset + i,
+      })
+    })
+    await batch.commit()
+  }
 }
 
 export async function deletePhotoRecord(galleryId, photoDocId) {
@@ -301,10 +344,6 @@ export function subscribeGalleryZipJob(galleryId, jobId, onData, onError) {
 }
 
 export async function listGalleryPhotos(galleryId) {
-  const q = query(
-    collection(db, 'galleries', galleryId, 'photos'),
-    orderBy('createdAt', 'desc'),
-  )
-  const snap = await getDocs(q)
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  const snap = await getDocs(collection(db, 'galleries', galleryId, 'photos'))
+  return sortGalleryPhotos(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
 }

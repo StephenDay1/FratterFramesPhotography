@@ -114,7 +114,7 @@ function galleryZipExportKey(galleryId) {
   return `galleries/${galleryId}/exports/gallery.zip`
 }
 
-/** Changes when photos are added, removed, or their r2Key changes. */
+/** Changes when photos are added, removed, or their r2Key changes — not when only order changes. */
 function computeGalleryZipFingerprint(photos) {
   const lines = photos
     .map((p) => `${p.id}\t${p.r2Key}`)
@@ -207,25 +207,53 @@ async function resolveGalleryZipExport(db, galleryId, galleryData) {
   return { action: 'build', photoCount: photos.length, fingerprint }
 }
 
+function photoEffectiveSortOrder(photo) {
+  if (typeof photo?.sortOrder === 'number' && Number.isFinite(photo.sortOrder)) {
+    return photo.sortOrder
+  }
+  const createdAt = photo?.createdAt
+  const millis =
+    typeof createdAt?.toMillis === 'function'
+      ? createdAt.toMillis()
+      : typeof createdAt?._seconds === 'number'
+        ? createdAt._seconds * 1000
+        : 0
+  return -millis
+}
+
+function sortGalleryPhotos(docs) {
+  return [...docs].sort((a, b) => {
+    const delta = photoEffectiveSortOrder(a) - photoEffectiveSortOrder(b)
+    if (delta !== 0) return delta
+    return String(a.id || '').localeCompare(String(b.id || ''))
+  })
+}
+
 async function loadPhotosForGallery(db, galleryId) {
   const snap = await db.collection('galleries').doc(galleryId).collection('photos').get()
   const rows = []
-  for (const doc of snap.docs) {
-    const d = doc.data()
+  for (const docSnap of snap.docs) {
+    const d = docSnap.data()
     const r2Key = typeof d.r2Key === 'string' ? d.r2Key.trim() : ''
     if (!r2Key) continue
     const prefix = `galleries/${galleryId}/`
     if (!r2Key.startsWith(prefix)) {
-      logger.warn('Skipping photo with unexpected r2Key prefix', { galleryId, r2Key, id: doc.id })
+      logger.warn('Skipping photo with unexpected r2Key prefix', {
+        galleryId,
+        r2Key,
+        id: docSnap.id,
+      })
       continue
     }
     rows.push({
-      id: doc.id,
+      id: docSnap.id,
       r2Key,
       filename: typeof d.filename === 'string' ? d.filename : '',
+      sortOrder: d.sortOrder,
+      createdAt: d.createdAt,
     })
   }
-  return rows
+  return sortGalleryPhotos(rows)
 }
 
 function shouldWriteZipJobProgress(index, total, lastWriteMs) {
